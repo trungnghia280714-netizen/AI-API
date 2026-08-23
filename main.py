@@ -5,6 +5,7 @@ from pydantic import BaseModel
 import os
 import time
 import httpx
+import httpx
 import json
 
 app = FastAPI(title="INTELIGENT API", version="5.0")
