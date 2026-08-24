@@ -5,234 +5,141 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>INTELIGENT — AI Studio</title>
   <style>
-    :root{--bg:#071029;--card:#0f1724;--accent:#00d4ff;--muted:#9aa9b2}
-    body{margin:0;font-family:Inter,ui-sans-serif,system-ui,Arial;background:linear-gradient(180deg,#041025 0%, #071232 100%);color:#e6f6ff}
-    .container{max-width:980px;margin:28px auto;padding:24px}
-    header{display:flex;align-items:center;gap:16px;margin-bottom:20px}
-    .logo{width:72px;height:72px;background:#0b2540;border-radius:14px;display:flex;align-items:center;justify-content:center;overflow:hidden}
+    body{font-family:system-ui,Arial;background:linear-gradient(180deg,#041025,#071232);color:#e6f6ff;margin:0;padding:24px}
+    .box{max-width:980px;margin:0 auto}
+    header{display:flex;gap:12px;align-items:center}
+    .logo{width:64px;height:64px;border-radius:10px;background:#0b2540;display:flex;align-items:center;justify-content:center;overflow:hidden}
     .logo img{width:100%;height:100%;object-fit:cover}
-    h1{margin:0;font-size:28px;letter-spacing:1px}
-    p.lead{margin:4px 0 0;color:var(--muted)}
-    .grid{display:grid;grid-template-columns:1fr;gap:18px;margin-top:18px}
-    .card{background:linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));padding:18px;border-radius:12px;border:1px solid rgba(255,255,255,0.03)}
-    label{display:block;font-size:13px;color:var(--muted);margin-bottom:8px}
-    textarea,input[type="text"]{width:100%;padding:10px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:inherit}
-    button{background:var(--accent);border:none;color:#022;color:#021; padding:10px 14px;border-radius:10px;cursor:pointer;font-weight:600}
-    .row{display:flex;gap:10px}
-    .output img{max-width:100%;border-radius:8px;margin-top:10px}
-    .frames-grid{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
-    .frames-grid img{width:120px;height:80px;object-fit:cover;border-radius:8px}
-    video#resultVideo{width:100%;border-radius:8px;margin-top:10px;background:#000}
-    footer{margin-top:18px;color:var(--muted);font-size:13px}
-    .muted{color:var(--muted)}
+    h1{margin:0;font-size:22px}
+    .card{background:rgba(255,255,255,0.03);padding:14px;border-radius:10px;margin-top:18px}
+    textarea,input{width:100%;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:inherit}
+    button{background:#00d4ff;border:none;padding:8px 12px;border-radius:8px;cursor:pointer;font-weight:600}
+    img.result{max-width:100%;border-radius:8px;margin-top:10px}
+    .frames{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+    video{width:100%;margin-top:10px;border-radius:8px;background:#000}
   </style>
 </head>
 <body>
-  <div class="container">
+  <div class="box">
     <header>
       <div class="logo">
         <img src="/static/logo.png" alt="LOGO" onerror="this.style.display='none'">
       </div>
       <div>
         <h1>INTELIGENT</h1>
-        <p class="lead">Web AI — Chat · Tạo ảnh · Tạo video</p>
+        <div style="color:#9aa9b2;font-size:13px">Web AI — Chat · Tạo ảnh · Tạo video</div>
       </div>
     </header>
 
-    <div class="grid">
-      <div class="card">
-        <h3>Chat AI</h3>
-        <label for="chatInput">Nhập câu hỏi / trò chuyện</label>
-        <textarea id="chatInput" rows="3" placeholder="Nhập tin nhắn..."></textarea>
-        <div style="margin-top:10px" class="row">
-          <button onclick="sendChat()">Gửi</button>
-          <div id="chatStatus" class="muted" style="align-self:center;margin-left:8px"></div>
-        </div>
-        <div id="chatOutput" style="margin-top:12px"></div>
+    <div class="card">
+      <h3>Chat</h3>
+      <textarea id="chatInput" rows="3" placeholder="Nhập tin nhắn..."></textarea>
+      <div style="margin-top:8px">
+        <button onclick="sendChat()">Gửi</button>
+        <span id="chatStatus" style="margin-left:12px;color:#9aa9b2"></span>
       </div>
-
-      <div class="card">
-        <h3>Tạo ảnh (Image)</h3>
-        <label for="imagePrompt">Prompt</label>
-        <input id="imagePrompt" type="text" placeholder="Ví dụ: a futuristic city at sunset, highly detailed">
-        <div style="margin-top:10px" class="row">
-          <button onclick="generateImage()">Tạo ảnh</button>
-          <div id="imageStatus" class="muted" style="align-self:center;margin-left:8px"></div>
-        </div>
-        <div class="output" id="imageResult"></div>
-      </div>
-
-      <div class="card">
-        <h3>Tạo video (từ nhiều ảnh)</h3>
-        <label for="videoPrompt">Prompt</label>
-        <input id="videoPrompt" type="text" placeholder="Ví dụ: a flowing river through neon jungle">
-        <label for="framesCount" style="margin-top:8px">Số khung (frames, 4-20)</label>
-        <input id="framesCount" type="number" min="2" max="40" value="6">
-        <div style="margin-top:10px" class="row">
-          <button onclick="generateVideo()">Tạo video</button>
-          <div id="videoStatus" class="muted" style="align-self:center;margin-left:8px"></div>
-        </div>
-
-        <div id="framesArea" class="frames-grid"></div>
-        <video id="resultVideo" controls></video>
-        <div style="margin-top:8px">
-          <a id="downloadLink" href="#" download="inteligent_video.webm" style="display:none"><button>Tải video</button></a>
-        </div>
-      </div>
+      <pre id="chatOutput" style="margin-top:8px"></pre>
     </div>
 
-    <footer>
-      <div>Chú ý: API keys được lưu an toàn trên server. Không hiển thị trên website.</div>
-    </footer>
+    <div class="card">
+      <h3>Tạo ảnh</h3>
+      <input id="imagePrompt" placeholder="Ví dụ: a futuristic city at sunset" />
+      <div style="margin-top:8px">
+        <button onclick="generateImage()">Tạo ảnh</button>
+        <span id="imageStatus" style="margin-left:12px;color:#9aa9b2"></span>
+      </div>
+      <div id="imageResult"></div>
+    </div>
+
+    <div class="card">
+      <h3>Tạo video (nhiều ảnh)</h3>
+      <input id="videoPrompt" placeholder="Ví dụ: neon river in a cyber jungle" />
+      <div style="margin-top:8px">
+        <label>Số khung: <input id="framesCount" type="number" value="6" min="2" max="20" style="width:80px" /></label>
+      </div>
+      <div style="margin-top:8px">
+        <button onclick="generateVideo()">Tạo video</button>
+        <span id="videoStatus" style="margin-left:12px;color:#9aa9b2"></span>
+      </div>
+      <div id="frames" class="frames"></div>
+      <video id="resultVideo" controls></video>
+      <a id="downloadLink" href="#" download="inteligent.webm" style="display:none"><button>Tải video</button></a>
+    </div>
+
   </div>
 
 <script>
-// Basic functions to call backend
 async function sendChat(){
   const txt = document.getElementById('chatInput').value.trim();
   if(!txt) return alert('Nhập tin nhắn');
-  document.getElementById('chatStatus').innerText = 'Đang gửi...';
-  const res = await fetch('/api/chat', {
-    method: 'POST', headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({message: txt})
-  });
-  document.getElementById('chatStatus').innerText = '';
-  if(!res.ok){
-    const e = await res.text();
-    document.getElementById('chatOutput').innerText = 'Lỗi: ' + e;
-    return;
-  }
+  document.getElementById('chatStatus').innerText='Đang...';
+  const res = await fetch('/api/chat', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({message:txt})});
+  document.getElementById('chatStatus').innerText='';
+  if(!res.ok){ document.getElementById('chatOutput').innerText = await res.text(); return; }
   const j = await res.json();
-  document.getElementById('chatOutput').innerText = j.reply || JSON.stringify(j);
+  document.getElementById('chatOutput').innerText = j.reply || JSON.stringify(j, null, 2);
 }
 
 async function generateImage(){
   const prompt = document.getElementById('imagePrompt').value.trim();
-  if(!prompt) return alert('Nhập prompt để tạo ảnh');
-  document.getElementById('imageStatus').innerText = 'Đang tạo ảnh... (có thể mất vài giây)';
-  document.getElementById('imageResult').innerHTML = '';
+  if(!prompt) return alert('Nhập prompt');
+  document.getElementById('imageStatus').innerText='Đang tạo...';
+  document.getElementById('imageResult').innerHTML='';
   try{
-    const res = await fetch('/api/image', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({prompt})
-    });
-    if(!res.ok){
-      const text = await res.text();
-      document.getElementById('imageResult').innerText = 'Lỗi: ' + text;
-    } else {
-      const j = await res.json();
-      const img = document.createElement('img');
-      img.src = j.image;
-      document.getElementById('imageResult').appendChild(img);
-    }
-  } catch(err){
-    document.getElementById('imageResult').innerText = 'Lỗi: ' + err;
-  } finally {
-    document.getElementById('imageStatus').innerText = '';
-  }
+    const res = await fetch('/api/image',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt})});
+    if(!res.ok){ document.getElementById('imageResult').innerText = await res.text(); return; }
+    const j = await res.json();
+    const img = document.createElement('img'); img.className='result'; img.src = j.image;
+    document.getElementById('imageResult').appendChild(img);
+  }catch(e){ document.getElementById('imageResult').innerText = e; }
+  finally{ document.getElementById('imageStatus').innerText=''; }
 }
 
 async function generateVideo(){
   const prompt = document.getElementById('videoPrompt').value.trim();
-  let frames = parseInt(document.getElementById('framesCount').value) || 6;
-  if(!prompt) return alert('Nhập prompt để tạo video');
-  if(frames < 2 || frames > 40) return alert('frames phải từ 2 tới 40');
-  document.getElementById('videoStatus').innerText = 'Đang sinh frames...';
-  document.getElementById('framesArea').innerHTML = '';
-  document.getElementById('resultVideo').src = '';
-  document.getElementById('downloadLink').style.display = 'none';
-
+  const frames = parseInt(document.getElementById('framesCount').value)||6;
+  if(!prompt) return alert('Nhập prompt');
+  document.getElementById('videoStatus').innerText='Sinh frames...';
+  document.getElementById('frames').innerHTML=''; document.getElementById('resultVideo').src=''; document.getElementById('downloadLink').style.display='none';
   try{
-    const res = await fetch('/api/video', {
-      method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({prompt, frames})
-    });
-    if(res.status >= 400){
-      const t = await res.text();
-      document.getElementById('videoStatus').innerText = 'Lỗi: ' + t;
-      return;
-    }
+    const res = await fetch('/api/video',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({prompt,frames})});
+    if(!res.ok){ document.getElementById('videoStatus').innerText = await res.text(); return; }
     const j = await res.json();
-    const arr = j.frames || [];
-    if(arr.length === 0){
-      document.getElementById('videoStatus').innerText = 'Không có ảnh trả về';
-      return;
-    }
-    const framesArea = document.getElementById('framesArea');
-    for(const d of arr){
-      const im = document.createElement('img');
-      im.src = d;
-      framesArea.appendChild(im);
-    }
-
-    document.getElementById('videoStatus').innerText = 'Ghép video trên trình duyệt...';
-    const blob = await assembleWebM(arr, 500);
+    const arr = j.frames||[];
+    for(const d of arr){ const im=document.createElement('img'); im.src=d; im.style.width='140px'; im.style.height='90px'; im.style.objectFit='cover'; im.style.borderRadius='6px'; document.getElementById('frames').appendChild(im); }
+    document.getElementById('videoStatus').innerText='Ghép video...';
+    const blob = await assembleWebM(arr, 400);
     const url = URL.createObjectURL(blob);
-    const videoEl = document.getElementById('resultVideo');
-    videoEl.src = url;
-    document.getElementById('downloadLink').href = url;
-    document.getElementById('downloadLink').style.display = 'inline-block';
-    document.getElementById('videoStatus').innerText = 'Hoàn tất';
-  } catch(err){
-    document.getElementById('videoStatus').innerText = 'Lỗi: ' + err;
+    document.getElementById('resultVideo').src = url;
+    document.getElementById('downloadLink').href = url; document.getElementById('downloadLink').style.display='inline-block';
+    document.getElementById('videoStatus').innerText='Hoàn tất';
+  }catch(e){ document.getElementById('videoStatus').innerText = e; }
+}
+
+function loadImage(src){ return new Promise((res,rej)=>{ const i=new Image(); i.crossOrigin='anonymous'; i.onload=()=>res(i); i.onerror=rej; i.src=src; }); }
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+
+async function assembleWebM(dataUrls, frameMs=500){
+  const imgs = await Promise.all(dataUrls.map(loadImage));
+  const w = Math.max(...imgs.map(i=>i.naturalWidth)); const h = Math.max(...imgs.map(i=>i.naturalHeight));
+  const canvas = document.createElement('canvas'); canvas.width=w; canvas.height=h; const ctx = canvas.getContext('2d');
+  const stream = canvas.captureStream(30);
+  const chunks = [];
+  let mr;
+  try{ mr = new MediaRecorder(stream, {mimeType:'video/webm;codecs=vp9'}); } catch(e){ mr = new MediaRecorder(stream); }
+  mr.ondataavailable = e=>{ if(e.data && e.data.size) chunks.push(e.data); };
+  const stopped = new Promise(resolve=> mr.onstop=()=>resolve());
+  mr.start();
+  for(const img of imgs){
+    ctx.fillStyle='#000'; ctx.fillRect(0,0,w,h);
+    const sx=(w-img.naturalWidth)/2, sy=(h-img.naturalHeight)/2;
+    ctx.drawImage(img,sx,sy);
+    await sleep(frameMs);
   }
+  await sleep(200);
+  mr.stop();
+  await stopped;
+  return new Blob(chunks, {type:'video/webm'});
 }
-
-function assembleWebM(dataUrls, frameDurationMs=500){
-  return new Promise(async (resolve, reject) => {
-    try{
-      const imgs = await Promise.all(dataUrls.map(loadImage));
-      const w = Math.max(...imgs.map(i=>i.naturalWidth));
-      const h = Math.max(...imgs.map(i=>i.naturalHeight));
-      const canvas = document.createElement('canvas');
-      canvas.width = w;
-      canvas.height = h;
-      const ctx = canvas.getContext('2d');
-
-      const stream = canvas.captureStream(30);
-      const recordedChunks = [];
-      const options = {mimeType: 'video/webm; codecs=vp9'};
-      let mediaRecorder;
-      try {
-        mediaRecorder = new MediaRecorder(stream, options);
-      } catch (e) {
-        mediaRecorder = new MediaRecorder(stream);
-      }
-      mediaRecorder.ondataavailable = function(e){
-        if(e.data && e.data.size) recordedChunks.push(e.data);
-      };
-      mediaRecorder.onstop = function(){
-        const blob = new Blob(recordedChunks, {type: 'video/webm'});
-        resolve(blob);
-      };
-      mediaRecorder.start();
-
-      for(const img of imgs){
-        ctx.fillStyle = "#000";
-        ctx.fillRect(0,0,w,h);
-        const sx = (w - img.naturalWidth)/2;
-        const sy = (h - img.naturalHeight)/2;
-        ctx.drawImage(img, sx, sy);
-        await sleep(frameDurationMs);
-      }
-      await sleep(200);
-      mediaRecorder.stop();
-    } catch(err){
-      reject(err);
-    }
-  });
-}
-
-function loadImage(src){
-  return new Promise((resolve,reject)=>{
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = ()=>resolve(img);
-    img.onerror = (e)=>reject(e);
-    img.src = src;
-  });
-}
-function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 </script>
-</body>
 </html>
