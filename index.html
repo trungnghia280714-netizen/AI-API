@@ -31,7 +31,6 @@
   <div class="container">
     <header>
       <div class="logo">
-        <!-- Replace /static/logo.png with your logo file on server -->
         <img src="/static/logo.png" alt="LOGO" onerror="this.style.display='none'">
       </div>
       <div>
@@ -41,7 +40,6 @@
     </header>
 
     <div class="grid">
-      <!-- Chat -->
       <div class="card">
         <h3>Chat AI</h3>
         <label for="chatInput">Nhập câu hỏi / trò chuyện</label>
@@ -53,7 +51,6 @@
         <div id="chatOutput" style="margin-top:12px"></div>
       </div>
 
-      <!-- Image -->
       <div class="card">
         <h3>Tạo ảnh (Image)</h3>
         <label for="imagePrompt">Prompt</label>
@@ -65,7 +62,6 @@
         <div class="output" id="imageResult"></div>
       </div>
 
-      <!-- Video -->
       <div class="card">
         <h3>Tạo video (từ nhiều ảnh)</h3>
         <label for="videoPrompt">Prompt</label>
@@ -136,7 +132,6 @@ async function generateImage(){
   }
 }
 
-// Generate video: request frames from server, then assemble on client
 async function generateVideo(){
   const prompt = document.getElementById('videoPrompt').value.trim();
   let frames = parseInt(document.getElementById('framesCount').value) || 6;
@@ -163,7 +158,6 @@ async function generateVideo(){
       document.getElementById('videoStatus').innerText = 'Không có ảnh trả về';
       return;
     }
-    // show thumbnails
     const framesArea = document.getElementById('framesArea');
     for(const d of arr){
       const im = document.createElement('img');
@@ -172,7 +166,7 @@ async function generateVideo(){
     }
 
     document.getElementById('videoStatus').innerText = 'Ghép video trên trình duyệt...';
-    const blob = await assembleWebM(arr, 500); // 500ms per frame
+    const blob = await assembleWebM(arr, 500);
     const url = URL.createObjectURL(blob);
     const videoEl = document.getElementById('resultVideo');
     videoEl.src = url;
@@ -184,7 +178,6 @@ async function generateVideo(){
   }
 }
 
-// Assemble frames (data URLs array) into a WebM using canvas & MediaRecorder
 function assembleWebM(dataUrls, frameDurationMs=500){
   return new Promise(async (resolve, reject) => {
     try{
@@ -196,15 +189,13 @@ function assembleWebM(dataUrls, frameDurationMs=500){
       canvas.height = h;
       const ctx = canvas.getContext('2d');
 
-      // Use MediaRecorder to record canvas stream as webm
-      const stream = canvas.captureStream(30); // 30fps
+      const stream = canvas.captureStream(30);
       const recordedChunks = [];
       const options = {mimeType: 'video/webm; codecs=vp9'};
       let mediaRecorder;
       try {
         mediaRecorder = new MediaRecorder(stream, options);
       } catch (e) {
-        // fallback to default
         mediaRecorder = new MediaRecorder(stream);
       }
       mediaRecorder.ondataavailable = function(e){
@@ -216,18 +207,14 @@ function assembleWebM(dataUrls, frameDurationMs=500){
       };
       mediaRecorder.start();
 
-      // draw frames
       for(const img of imgs){
         ctx.fillStyle = "#000";
         ctx.fillRect(0,0,w,h);
-        // center image
         const sx = (w - img.naturalWidth)/2;
         const sy = (h - img.naturalHeight)/2;
         ctx.drawImage(img, sx, sy);
-        // wait for frameDurationMs
         await sleep(frameDurationMs);
       }
-      // stop recorder after short delay
       await sleep(200);
       mediaRecorder.stop();
     } catch(err){
@@ -245,7 +232,6 @@ function loadImage(src){
     img.src = src;
   });
 }
-
 function sleep(ms){return new Promise(r=>setTimeout(r,ms));}
 </script>
 </body>
