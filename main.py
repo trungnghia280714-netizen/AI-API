@@ -7,17 +7,18 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-# ---------- Cấu hình từ biến môi trường (KHÔNG hardcode key) ----------
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-POLLINATIONS_API_KEY = os.environ.get("POLLINATIONS_API_KEY", "")
-HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY", "")
+# -------------------------------------------------
+# 1️⃣  Configuration – read from environment only
+# -------------------------------------------------
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "")
+HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY", "")
 
-# Groq đã khai tử llama-3.3-70b-versatile (6/2026) -> dùng model thay thế
-CHAT_MODEL = os.environ.get("CHAT_MODEL", "openai/gpt-oss-120b")
-CODE_MODEL = os.environ.get("CODE_MODEL", "openai/gpt-oss-120b")
-# HuggingFace: model + provider cho text-to-video qua Inference Providers (router mới)
-VIDEO_MODEL = os.environ.get("VIDEO_MODEL", "Wan-AI/Wan2.2-TI2V-5B")
-VIDEO_PROVIDER = os.environ.get("VIDEO_PROVIDER", "fal-ai")
+# Model selectors (can be overridden by env)
+CHAT_MODEL = os.getenv("CHAT_MODEL", "openai/gpt-oss-120b")
+CODE_MODEL = os.getenv("CODE_MODEL", "openai/gpt-oss-120b")
+VIDEO_MODEL = os.getenv("VIDEO_MODEL", "Wan-AI/Wan2.2-TI2V-5B")
+VIDEO_PROVIDER = os.getenv("VIDEO_PROVIDER", "fal-ai")   # kept for backward‑compatibility only
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -32,8 +33,11 @@ app.add_middleware(
 )
 
 
-def call_groq(messages: list, model: str, temperature: float = 0.7):
-    """Gọi Groq chat completions, ném lỗi requests.RequestException nếu fail."""
+# -------------------------------------------------
+# 2️⃣  Helper – call Groq chat completions
+# -------------------------------------------------
+def call_groq(messages: list, model: str, temperature: float = 0.7) -> str:
+    """Call Groq chat completions. Raises `requests.RequestException` on failure."""
     if not GROQ_API_KEY:
         raise ValueError("Server chưa cấu hình GROQ_API_KEY.")
 
@@ -51,7 +55,11 @@ def call_groq(messages: list, model: str, temperature: float = 0.7):
     return data["choices"][0]["message"]["content"]
 
 
-# ---------- 1. CHAT ----------
+# -------------------------------------------------
+# 3️⃣  Endpoints
+# -------------------------------------------------
+
+# ---------- CHAT ----------
 @app.post("/api/chat")
 async def chat(request: Request):
     try:
@@ -78,13 +86,19 @@ async def chat(request: Request):
             detail = e.response.json().get("error", {}).get("message", "")
         except Exception:
             pass
-        return JSONResponse({"error": f"Lỗi khi gọi dịch vụ chat: {detail or str(e)}"}, status_code=502)
+        return JSONResponse(
+            {"error": f"Lỗi khi gọi dịch vụ chat: {detail or str(e)}"},
+            status_code=502,
+        )
     except requests.exceptions.RequestException as e:
-        return JSONResponse({"error": f"Lỗi khi gọi dịch vụ chat: {str(e)}"}, status_code=502)
+        return JSONResponse(
+            {"error": f"Lỗi khi gọi dịch vụ chat: {str(e)}"}, status_code=502
+        )
 
 
-# ---------- 2. ẢNH ----------
-IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "flux")
+# ---------- IMAGE ----------
+IMAGE_MODEL = os.getenv("IMAGE_MODEL", "flux")
+
 
 @app.post("/api/image")
 async def image(request: Request):
@@ -102,11 +116,11 @@ async def image(request: Request):
 
     encoded = urllib.parse.quote(prompt)
     params = {
-        "model": IMAGE_MODEL,   # flux cho chất lượng tốt hơn model mặc định cũ
+        "model": IMAGE_MODEL,
         "width": width,
         "height": height,
-        "nologo": "true",       # bỏ watermark
-        "enhance": "true",      # tự làm giàu prompt cho ảnh chi tiết, đúng ý hơn
+        "nologo": "true",   # bỏ watermark
+        "enhance": "true",  # tự làm giàu prompt cho ảnh chi tiết
         "safe": "false",
     }
     if POLLINATIONS_API_KEY:
@@ -114,13 +128,16 @@ async def image(request: Request):
 
     query = urllib.parse.urlencode(params)
     url = f"https://image.pollinations.ai/prompt/{encoded}?{query}"
-
     return {"image_url": url}
 
 
-# ---------- 3. VIDEO ----------
+# ---------- VIDEO ----------
 @app.post("/api/video")
 async def video(request: Request):
+    """
+    Create a short video from a text prompt using HuggingFace Inference Providers.
+    The endpoint returns a **base64‑encoded** MP4 (so you can embed it directly in JSON).
+    """
     try:
         body = await request.json()
     except Exception:
@@ -131,29 +148,40 @@ async def video(request: Request):
         return JSONResponse({"error": "Thiếu 'prompt'."}, status_code=400)
 
     if not HUGGINGFACE_API_KEY:
-        return JSONResponse({"error": "Server chưa cấu hình HUGGINGFACE_API_KEY."}, status_code=400)
+        return JSONResponse(
+            {"error": "Server chưa cấu hình HUGGINGFACE_API_KEY."}, status_code=400
+        )
 
     try:
-        # HuggingFace đã chuyển sang hệ thống Inference Providers (router.huggingface.co).
-        # Dùng SDK chính thức để xử lý routing + polling cho đúng.
+        # -------------------------------------------------
+        # 0.28.x of huggingface_hub switched to a simpler ctor:
+        #   InferenceClient(token=..., timeout=..., ...)   <-- no `provider=` arg
+        # -------------------------------------------------
         from huggingface_hub import InferenceClient
 
-        client = InferenceClient(provider=VIDEO_PROVIDER, api_key=HUGGINGFACE_API_KEY)
-        video_bytes = client.text_to_video(prompt, model=VIDEO_MODEL)
+        client = InferenceClient(token=HUGGINGFACE_API_KEY)
 
+        # The method name stays the same, we just pass the model name explicitly.
+        video_bytes: bytes = client.text_to_video(prompt, model=VIDEO_MODEL)
+
+        # Encode for JSON transport
         encoded_video = base64.b64encode(video_bytes).decode("utf-8")
         return {"video_base64": encoded_video, "mime": "video/mp4"}
 
     except Exception as e:
-        return JSONResponse({"error": f"Lỗi khi tạo video: {str(e)}"}, status_code=502)
+        # Any exception (network, model not found, quota, etc.) lands here.
+        return JSONResponse(
+            {"error": f"Lỗi khi tạo video: {str(e)}"}, status_code=502
+        )
 
 
-# ---------- 4. CODE ASSISTANT ----------
+# ---------- CODE ASSISTANT ----------
 CODE_SYSTEM_PROMPT = (
     "Bạn là một trợ lý lập trình chuyên nghiệp, giống GitHub Copilot. "
     "Khi nhận yêu cầu, hãy viết code hoàn chỉnh, chạy được ngay, theo đúng ngôn ngữ "
     "người dùng yêu cầu (Python, JavaScript, HTML, CSS, v.v.). "
-    "Luôn đặt code trong khối markdown code block (```ngôn_ngữ ... ```). "
+    "Luôn đặt code trong khối markdown code block (
+ngôn_ngữ ... ```). "
     "Sau đoạn code, giải thích ngắn gọn cách code hoạt động và lưu ý sử dụng (nếu có). "
     "Nếu người dùng không nói rõ ngôn ngữ, hãy chọn ngôn ngữ phù hợp nhất với yêu cầu."
 )
@@ -173,7 +201,11 @@ async def code_assistant(request: Request):
     if not prompt:
         return JSONResponse({"error": "Thiếu 'prompt'."}, status_code=400)
 
-    user_content = f"Ngôn ngữ mong muốn: {language}\nYêu cầu: {prompt}" if language else prompt
+    user_content = (
+        f"Ngôn ngữ mong muốn: {language}\nYêu cầu: {prompt}"
+        if language
+        else prompt
+    )
 
     messages = (
         [{"role": "system", "content": CODE_SYSTEM_PROMPT}]
@@ -192,9 +224,14 @@ async def code_assistant(request: Request):
             detail = e.response.json().get("error", {}).get("message", "")
         except Exception:
             pass
-        return JSONResponse({"error": f"Lỗi khi gọi dịch vụ code: {detail or str(e)}"}, status_code=502)
+        return JSONResponse(
+            {"error": f"Lỗi khi gọi dịch vụ code: {detail or str(e)}"},
+            status_code=502,
+        )
     except requests.exceptions.RequestException as e:
-        return JSONResponse({"error": f"Lỗi khi gọi dịch vụ code: {str(e)}"}, status_code=502)
+        return JSONResponse(
+            {"error": f"Lỗi khi gọi dịch vụ code: {str(e)}"}, status_code=502
+        )
 
 
 # ---------- Health check ----------
