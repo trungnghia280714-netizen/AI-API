@@ -1,139 +1,182 @@
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
-import os
-import requests
 import base64
-import time
+import os
+import urllib.parse
 
-app = FastAPI(title="INTELIGENT API")
+import requests
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
-# Serve static files (logo etc.) from ./static if present
-if os.path.isdir("static"):
-    app.mount("/static", StaticFiles(directory="static"), name="static")
+# ---------- Cấu hình từ biến môi trường (KHÔNG hardcode key) ----------
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+POLLINATIONS_API_KEY = os.environ.get("POLLINATIONS_API_KEY", "")
+HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY", "")
+
+CHAT_MODEL = os.environ.get("CHAT_MODEL", "llama-3.3-70b-versatile")
+CODE_MODEL = os.environ.get("CODE_MODEL", "llama-3.3-70b-versatile")
+VIDEO_MODEL = os.environ.get("VIDEO_MODEL", "damo-vilab/text-to-video-ms-1.7b")
+
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+
+app = FastAPI(title="INTELIGENT Backend")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # production: restrict to your domain
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Read API keys from environment (never hardcoded)
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY")
-HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
 
-# Helper: simple HuggingFace text generation call (deferred, only on request)
-def hf_text_generation(prompt: str, model: str = "gpt2", max_tokens: int = 150):
-    if not HUGGINGFACE_API_KEY:
-        raise RuntimeError("HUGGINGFACE_API_KEY is not set")
-    url = f"https://api-inference.huggingface.co/models/{model}"
-    headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
-    payload = {"inputs": prompt, "parameters": {"max_new_tokens": max_tokens, "do_sample": False}}
-    resp = requests.post(url, headers=headers, json=payload, timeout=60)
-    if resp.status_code != 200:
-        raise RuntimeError(f"HuggingFace text error {resp.status_code}: {resp.text}")
+def call_groq(messages: list, model: str, temperature: float = 0.7):
+    """Gọi Groq chat completions, ném lỗi requests.RequestException nếu fail."""
+    if not GROQ_API_KEY:
+        raise ValueError("Server chưa cấu hình GROQ_API_KEY.")
+
+    resp = requests.post(
+        GROQ_URL,
+        headers={
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json",
+        },
+        json={"model": model, "messages": messages, "temperature": temperature},
+        timeout=60,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    return data["choices"][0]["message"]["content"]
+
+
+# ---------- 1. CHAT ----------
+@app.post("/api/chat")
+async def chat(request: Request):
     try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Body request không hợp lệ (cần JSON)."}, status_code=400)
+
+    message = body.get("message", "").strip()
+    history = body.get("history", [])
+
+    if not message:
+        return JSONResponse({"error": "Thiếu 'message'."}, status_code=400)
+
+    messages = history + [{"role": "user", "content": message}]
+
+    try:
+        reply = call_groq(messages, CHAT_MODEL)
+        return {"reply": reply}
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except requests.exceptions.RequestException as e:
+        return JSONResponse({"error": f"Lỗi khi gọi dịch vụ chat: {str(e)}"}, status_code=502)
+
+
+# ---------- 2. ẢNH ----------
+@app.post("/api/image")
+async def image(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Body request không hợp lệ (cần JSON)."}, status_code=400)
+
+    prompt = body.get("prompt", "").strip()
+    if not prompt:
+        return JSONResponse({"error": "Thiếu 'prompt'."}, status_code=400)
+
+    encoded = urllib.parse.quote(prompt)
+    url = f"https://image.pollinations.ai/prompt/{encoded}"
+    if POLLINATIONS_API_KEY:
+        url += f"?token={POLLINATIONS_API_KEY}"
+
+    return {"image_url": url}
+
+
+# ---------- 3. VIDEO ----------
+@app.post("/api/video")
+async def video(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Body request không hợp lệ (cần JSON)."}, status_code=400)
+
+    prompt = body.get("prompt", "").strip()
+    if not prompt:
+        return JSONResponse({"error": "Thiếu 'prompt'."}, status_code=400)
+
+    if not HUGGINGFACE_API_KEY:
+        return JSONResponse({"error": "Server chưa cấu hình HUGGINGFACE_API_KEY."}, status_code=400)
+
+    try:
+        resp = requests.post(
+            f"https://api-inference.huggingface.co/models/{VIDEO_MODEL}",
+            headers={"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"},
+            json={"inputs": prompt},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        content_type = resp.headers.get("content-type", "")
+
+        if "video" in content_type or "octet-stream" in content_type:
+            encoded_video = base64.b64encode(resp.content).decode("utf-8")
+            return {"video_base64": encoded_video, "mime": content_type or "video/mp4"}
+
         data = resp.json()
-        if isinstance(data, list) and len(data) and "generated_text" in data[0]:
-            return data[0]["generated_text"]
-        if isinstance(data, dict) and "generated_text" in data:
-            return data["generated_text"]
-        return str(data)
-    except Exception:
-        return resp.text
+        if isinstance(data, dict) and "estimated_time" in data:
+            return JSONResponse(
+                {"error": f"Mô hình đang khởi động, thử lại sau ~{int(data['estimated_time'])}s."},
+                status_code=503,
+            )
+        return JSONResponse({"error": f"Không tạo được video: {data}"}, status_code=500)
 
-# Helper: HuggingFace image inference -> return data URL (base64 PNG)
-def hf_image_generation(prompt: str, model: str = "stabilityai/stable-diffusion-2"):
-    if not HUGGINGFACE_API_KEY:
-        raise RuntimeError("HUGGINGFACE_API_KEY is not set")
-    url = f"https://api-inference.huggingface.co/models/{model}"
-    headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}", "Accept": "application/json, image/png"}
-    payload = {"inputs": prompt}
-    resp = requests.post(url, headers=headers, json=payload, timeout=120)
-    if resp.status_code == 503:
-        # model might be loading
-        time.sleep(1.0)
-        resp = requests.post(url, headers=headers, json=payload, timeout=120)
-    if resp.status_code != 200:
-        raise RuntimeError(f"HuggingFace image error {resp.status_code}: {resp.text}")
-    ct = resp.headers.get("content-type", "")
-    if "image" in ct:
-        img_bytes = resp.content
-        b64 = base64.b64encode(img_bytes).decode("utf-8")
-        return f"data:{ct};base64,{b64}"
-    # fallback: try parse json fields
+    except requests.exceptions.RequestException as e:
+        return JSONResponse({"error": f"Lỗi khi gọi dịch vụ video: {str(e)}"}, status_code=502)
+
+
+# ---------- 4. CODE ASSISTANT ----------
+CODE_SYSTEM_PROMPT = (
+    "Bạn là một trợ lý lập trình chuyên nghiệp, giống GitHub Copilot. "
+    "Khi nhận yêu cầu, hãy viết code hoàn chỉnh, chạy được ngay, theo đúng ngôn ngữ "
+    "người dùng yêu cầu (Python, JavaScript, HTML, CSS, v.v.). "
+    "Luôn đặt code trong khối markdown code block (```ngôn_ngữ ... ```). "
+    "Sau đoạn code, giải thích ngắn gọn cách code hoạt động và lưu ý sử dụng (nếu có). "
+    "Nếu người dùng không nói rõ ngôn ngữ, hãy chọn ngôn ngữ phù hợp nhất với yêu cầu."
+)
+
+
+@app.post("/api/code")
+async def code_assistant(request: Request):
     try:
-        j = resp.json()
-        for k in ("image_base64", "b64_json", "image"):
-            if k in j:
-                b64 = j[k]
-                if not b64.startswith("data:"):
-                    return "data:image/png;base64," + b64
-                return b64
-        return str(j)
+        body = await request.json()
     except Exception:
-        return resp.text
+        return JSONResponse({"error": "Body request không hợp lệ (cần JSON)."}, status_code=400)
 
+    prompt = body.get("prompt", "").strip()
+    language = body.get("language", "").strip()  # tùy chọn: python, javascript, html...
+    history = body.get("history", [])
+
+    if not prompt:
+        return JSONResponse({"error": "Thiếu 'prompt'."}, status_code=400)
+
+    user_content = f"Ngôn ngữ mong muốn: {language}\nYêu cầu: {prompt}" if language else prompt
+
+    messages = (
+        [{"role": "system", "content": CODE_SYSTEM_PROMPT}]
+        + history
+        + [{"role": "user", "content": user_content}]
+    )
+
+    try:
+        reply = call_groq(messages, CODE_MODEL, temperature=0.3)
+        return {"reply": reply}
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
+    except requests.exceptions.RequestException as e:
+        return JSONResponse({"error": f"Lỗi khi gọi dịch vụ code: {str(e)}"}, status_code=502)
+
+
+# ---------- Health check ----------
 @app.get("/")
 async def root():
-    # Serve index.html if exists
-    if os.path.exists("index.html"):
-        return FileResponse("index.html")
-    return JSONResponse({"status": "ok", "msg": "index.html not found"})
-
-@app.post("/api/chat")
-async def api_chat(req: Request):
-    body = await req.json()
-    message = body.get("message") or body.get("prompt") or ""
-    if not message:
-        raise HTTPException(status_code=400, detail="Missing 'message' in request")
-    try:
-        reply = hf_text_generation(message, model="gpt2", max_tokens=200)
-        return {"reply": reply}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Chat failed: {e}")
-
-@app.post("/api/image")
-async def api_image(req: Request):
-    body = await req.json()
-    prompt = body.get("prompt") or ""
-    if not prompt:
-        raise HTTPException(status_code=400, detail="Missing 'prompt' in request")
-    try:
-        img = hf_image_generation(prompt)
-        return {"image": img}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Image generation failed: {e}")
-
-@app.post("/api/video")
-async def api_video(req: Request):
-    body = await req.json()
-    prompt = body.get("prompt") or ""
-    frames = int(body.get("frames") or 6)
-    if not prompt:
-        raise HTTPException(status_code=400, detail="Missing 'prompt'")
-    if frames < 2 or frames > 40:
-        raise HTTPException(status_code=400, detail="frames must be 2..40")
-    frames_list = []
-    for i in range(frames):
-        try:
-            frame_prompt = f"{prompt} --frame {i+1}/{frames}"
-            img = hf_image_generation(frame_prompt)
-            frames_list.append(img)
-            time.sleep(0.6)  # avoid hitting rate limits too fast
-        except Exception as e:
-            return JSONResponse({"frames": frames_list, "error": str(e)}, status_code=207)
-    return {"frames": frames_list}
-
-@app.get("/api/health")
-async def health():
-    return {
-        "status": "ok",
-        "hf_key_set": bool(HUGGINGFACE_API_KEY),
-        "pollinations_key_set": bool(POLLINATIONS_API_KEY),
-        "groq_key_set": bool(GROQ_API_KEY),
-    }
+    return {"status": "ok", "service": "INTELIGENT Backend"}
