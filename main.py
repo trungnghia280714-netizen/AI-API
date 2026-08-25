@@ -12,9 +12,12 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 POLLINATIONS_API_KEY = os.environ.get("POLLINATIONS_API_KEY", "")
 HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY", "")
 
-CHAT_MODEL = os.environ.get("CHAT_MODEL", "llama-3.3-70b-versatile")
-CODE_MODEL = os.environ.get("CODE_MODEL", "llama-3.3-70b-versatile")
-VIDEO_MODEL = os.environ.get("VIDEO_MODEL", "damo-vilab/text-to-video-ms-1.7b")
+# Groq đã khai tử llama-3.3-70b-versatile (6/2026) -> dùng model thay thế
+CHAT_MODEL = os.environ.get("CHAT_MODEL", "openai/gpt-oss-120b")
+CODE_MODEL = os.environ.get("CODE_MODEL", "openai/gpt-oss-120b")
+# HuggingFace: model + provider cho text-to-video qua Inference Providers (router mới)
+VIDEO_MODEL = os.environ.get("VIDEO_MODEL", "Wan-AI/Wan2.2-TI2V-5B")
+VIDEO_PROVIDER = os.environ.get("VIDEO_PROVIDER", "fal-ai")
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -69,11 +72,20 @@ async def chat(request: Request):
         return {"reply": reply}
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+    except requests.exceptions.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.response.json().get("error", {}).get("message", "")
+        except Exception:
+            pass
+        return JSONResponse({"error": f"Lỗi khi gọi dịch vụ chat: {detail or str(e)}"}, status_code=502)
     except requests.exceptions.RequestException as e:
         return JSONResponse({"error": f"Lỗi khi gọi dịch vụ chat: {str(e)}"}, status_code=502)
 
 
 # ---------- 2. ẢNH ----------
+IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "flux")
+
 @app.post("/api/image")
 async def image(request: Request):
     try:
@@ -82,13 +94,26 @@ async def image(request: Request):
         return JSONResponse({"error": "Body request không hợp lệ (cần JSON)."}, status_code=400)
 
     prompt = body.get("prompt", "").strip()
+    width = body.get("width", 1024)
+    height = body.get("height", 1024)
+
     if not prompt:
         return JSONResponse({"error": "Thiếu 'prompt'."}, status_code=400)
 
     encoded = urllib.parse.quote(prompt)
-    url = f"https://image.pollinations.ai/prompt/{encoded}"
+    params = {
+        "model": IMAGE_MODEL,   # flux cho chất lượng tốt hơn model mặc định cũ
+        "width": width,
+        "height": height,
+        "nologo": "true",       # bỏ watermark
+        "enhance": "true",      # tự làm giàu prompt cho ảnh chi tiết, đúng ý hơn
+        "safe": "false",
+    }
     if POLLINATIONS_API_KEY:
-        url += f"?token={POLLINATIONS_API_KEY}"
+        params["key"] = POLLINATIONS_API_KEY
+
+    query = urllib.parse.urlencode(params)
+    url = f"https://image.pollinations.ai/prompt/{encoded}?{query}"
 
     return {"image_url": url}
 
@@ -109,29 +134,18 @@ async def video(request: Request):
         return JSONResponse({"error": "Server chưa cấu hình HUGGINGFACE_API_KEY."}, status_code=400)
 
     try:
-        resp = requests.post(
-            f"https://api-inference.huggingface.co/models/{VIDEO_MODEL}",
-            headers={"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"},
-            json={"inputs": prompt},
-            timeout=120,
-        )
-        resp.raise_for_status()
-        content_type = resp.headers.get("content-type", "")
+        # HuggingFace đã chuyển sang hệ thống Inference Providers (router.huggingface.co).
+        # Dùng SDK chính thức để xử lý routing + polling cho đúng.
+        from huggingface_hub import InferenceClient
 
-        if "video" in content_type or "octet-stream" in content_type:
-            encoded_video = base64.b64encode(resp.content).decode("utf-8")
-            return {"video_base64": encoded_video, "mime": content_type or "video/mp4"}
+        client = InferenceClient(provider=VIDEO_PROVIDER, api_key=HUGGINGFACE_API_KEY)
+        video_bytes = client.text_to_video(prompt, model=VIDEO_MODEL)
 
-        data = resp.json()
-        if isinstance(data, dict) and "estimated_time" in data:
-            return JSONResponse(
-                {"error": f"Mô hình đang khởi động, thử lại sau ~{int(data['estimated_time'])}s."},
-                status_code=503,
-            )
-        return JSONResponse({"error": f"Không tạo được video: {data}"}, status_code=500)
+        encoded_video = base64.b64encode(video_bytes).decode("utf-8")
+        return {"video_base64": encoded_video, "mime": "video/mp4"}
 
-    except requests.exceptions.RequestException as e:
-        return JSONResponse({"error": f"Lỗi khi gọi dịch vụ video: {str(e)}"}, status_code=502)
+    except Exception as e:
+        return JSONResponse({"error": f"Lỗi khi tạo video: {str(e)}"}, status_code=502)
 
 
 # ---------- 4. CODE ASSISTANT ----------
@@ -153,7 +167,7 @@ async def code_assistant(request: Request):
         return JSONResponse({"error": "Body request không hợp lệ (cần JSON)."}, status_code=400)
 
     prompt = body.get("prompt", "").strip()
-    language = body.get("language", "").strip()  # tùy chọn: python, javascript, html...
+    language = body.get("language", "").strip()
     history = body.get("history", [])
 
     if not prompt:
@@ -172,6 +186,13 @@ async def code_assistant(request: Request):
         return {"reply": reply}
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
+    except requests.exceptions.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.response.json().get("error", {}).get("message", "")
+        except Exception:
+            pass
+        return JSONResponse({"error": f"Lỗi khi gọi dịch vụ code: {detail or str(e)}"}, status_code=502)
     except requests.exceptions.RequestException as e:
         return JSONResponse({"error": f"Lỗi khi gọi dịch vụ code: {str(e)}"}, status_code=502)
 
