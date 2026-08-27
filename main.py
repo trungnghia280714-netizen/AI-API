@@ -23,17 +23,17 @@ from database import Conversation, Message, User, get_db, init_db
 
 # ---------- Cấu hình từ biến môi trường (KHÔNG hardcode key) ----------
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+POLLINATIONS_API_KEY = os.environ.get("POLLINATIONS_API_KEY", "")
 HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY", "")
 
 CHAT_MODEL = os.environ.get("CHAT_MODEL", "openai/gpt-oss-120b")
 CODE_MODEL = os.environ.get("CODE_MODEL", "openai/gpt-oss-120b")
-IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "gemini-3.1-flash-image")
+# Gemini image (Nano Banana 2) không có hạn mức free -> dùng Pollinations (model Flux, miễn phí)
+IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "flux")
 VIDEO_MODEL = os.environ.get("VIDEO_MODEL", "Wan-AI/Wan2.2-TI2V-5B")
 VIDEO_PROVIDER = os.environ.get("VIDEO_PROVIDER", "fal-ai")
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-GEMINI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
@@ -309,8 +309,31 @@ async def chat(
 
 
 # =====================================================================
-# 2. ẢNH (Gemini "Nano Banana 2" qua Interactions API)
+# 2. ẢNH (Pollinations - model Flux, miễn phí)
 # =====================================================================
+def translate_prompt_to_english(prompt: str) -> str:
+    """Dịch/diễn giải prompt sang tiếng Anh chi tiết cho model Flux hiểu đúng ý hơn.
+    Nếu Groq lỗi vì bất kỳ lý do gì, âm thầm fallback về prompt gốc."""
+    if not GROQ_API_KEY:
+        return prompt
+    try:
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Dịch mô tả ảnh sau sang tiếng Anh, giữ đúng chủ thể và ý nghĩa gốc, "
+                    "có thể bổ sung vài chi tiết hình ảnh (ánh sáng, góc chụp, phong cách) "
+                    "để ảnh đẹp hơn nhưng KHÔNG được đổi chủ thể chính. "
+                    "Chỉ trả về câu mô tả tiếng Anh, không giải thích gì thêm."
+                ),
+            },
+            {"role": "user", "content": prompt},
+        ]
+        return call_groq(messages, CHAT_MODEL, temperature=0.4).strip()
+    except Exception:
+        return prompt
+
+
 @app.post("/api/image")
 async def image(request: Request):
     try:
@@ -319,60 +342,36 @@ async def image(request: Request):
         return JSONResponse({"error": "Body request không hợp lệ (cần JSON)."}, status_code=400)
 
     prompt = body.get("prompt", "").strip()
+    width = body.get("width", 1024)
+    height = body.get("height", 1024)
+
     if not prompt:
         return JSONResponse({"error": "Thiếu 'prompt'."}, status_code=400)
 
-    if not GEMINI_API_KEY:
-        return JSONResponse({"error": "Server chưa cấu hình GEMINI_API_KEY."}, status_code=400)
+    final_prompt = translate_prompt_to_english(prompt)
+    encoded = urllib.parse.quote(final_prompt)
+
+    params = {
+        "model": IMAGE_MODEL,  # flux
+        "width": width,
+        "height": height,
+        "nologo": "true",
+        "safe": "false",
+    }
+    if POLLINATIONS_API_KEY:
+        params["key"] = POLLINATIONS_API_KEY
+
+    query = urllib.parse.urlencode(params)
+    image_url = f"https://image.pollinations.ai/prompt/{encoded}?{query}"
 
     try:
-        resp = requests.post(
-            GEMINI_INTERACTIONS_URL,
-            headers={
-                "x-goog-api-key": GEMINI_API_KEY,
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": IMAGE_MODEL,
-                "input": prompt,
-                "response_format": {"type": "image"},
-            },
-            timeout=90,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
-        output_image = data.get("output_image")
-        image_b64 = None
-        mime = "image/png"
-
-        if output_image and output_image.get("data"):
-            image_b64 = output_image["data"]
-            mime = output_image.get("mime_type", "image/png")
-        else:
-            for step in data.get("steps", []):
-                if step.get("type") != "model_output":
-                    continue
-                for block in step.get("content", []):
-                    if block.get("type") == "image" and block.get("data"):
-                        image_b64 = block["data"]
-                        mime = block.get("mime_type", "image/png")
-                        break
-                if image_b64:
-                    break
-
-        if not image_b64:
-            return JSONResponse({"error": "Gemini không trả về ảnh nào (có thể do bộ lọc an toàn)."}, status_code=502)
-
+        # Tải ảnh về rồi trả base64 cho frontend, để đồng nhất với các route khác
+        # và tránh lộ trực tiếp URL công khai (có thể chứa key) ra trình duyệt.
+        img_resp = requests.get(image_url, timeout=60)
+        img_resp.raise_for_status()
+        mime = img_resp.headers.get("content-type", "image/jpeg")
+        image_b64 = base64.b64encode(img_resp.content).decode("utf-8")
         return {"image_base64": image_b64, "mime": mime}
-
-    except requests.exceptions.HTTPError as e:
-        detail = ""
-        try:
-            detail = e.response.json().get("error", {}).get("message", "")
-        except Exception:
-            pass
-        return JSONResponse({"error": f"Lỗi khi gọi dịch vụ ảnh: {detail or str(e)}"}, status_code=502)
     except requests.exceptions.RequestException as e:
         return JSONResponse({"error": f"Lỗi khi gọi dịch vụ ảnh: {str(e)}"}, status_code=502)
 
