@@ -1,29 +1,42 @@
 import base64
+import json
 import os
+import re
 import urllib.parse
 
 import requests
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
+from sqlalchemy.orm import Session
+
+from auth import (
+    create_access_token,
+    get_current_user,
+    get_optional_user,
+    hash_password,
+    verify_password,
+)
+from database import Conversation, Message, User, get_db, init_db
 
 # ---------- Cấu hình từ biến môi trường (KHÔNG hardcode key) ----------
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY", "")
 
-# Groq đã khai tử llama-3.3-70b-versatile (6/2026) -> dùng model thay thế
 CHAT_MODEL = os.environ.get("CHAT_MODEL", "openai/gpt-oss-120b")
 CODE_MODEL = os.environ.get("CODE_MODEL", "openai/gpt-oss-120b")
-# Gemini "Nano Banana 2" - model tạo ảnh khuyến nghị hiện tại của Google (11/2026)
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "gemini-3.1-flash-image")
-# HuggingFace: model + provider cho text-to-video qua Inference Providers (router mới)
 VIDEO_MODEL = os.environ.get("VIDEO_MODEL", "Wan-AI/Wan2.2-TI2V-5B")
 VIDEO_PROVIDER = os.environ.get("VIDEO_PROVIDER", "fal-ai")
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
-# Google đã chuyển tạo ảnh sang "Interactions API" mới, khác hẳn generateContent cũ
 GEMINI_INTERACTIONS_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
+
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 
 app = FastAPI(title="INTELIGENT Backend")
 
@@ -36,8 +49,12 @@ app.add_middleware(
 )
 
 
+@app.on_event("startup")
+def on_startup():
+    init_db()
+
+
 def call_groq(messages: list, model: str, temperature: float = 0.7):
-    """Gọi Groq chat completions, ném lỗi requests.RequestException nếu fail."""
     if not GROQ_API_KEY:
         raise ValueError("Server chưa cấu hình GROQ_API_KEY.")
 
@@ -62,9 +79,206 @@ def extract_groq_error(e: requests.exceptions.HTTPError) -> str:
         return ""
 
 
-# ---------- 1. CHAT ----------
+def save_turn(db: Session, user: User, conversation_id, tab: str, user_text: str, assistant_text: str):
+    """Lưu 1 lượt hỏi-đáp vào DB nếu người dùng đã đăng nhập. Trả về conversation_id."""
+    conv = None
+    if conversation_id:
+        conv = (
+            db.query(Conversation)
+            .filter(Conversation.id == conversation_id, Conversation.user_id == user.id)
+            .first()
+        )
+    if not conv:
+        title = user_text.strip()[:60] or "Cuộc trò chuyện mới"
+        conv = Conversation(user_id=user.id, tab=tab, title=title)
+        db.add(conv)
+        db.commit()
+        db.refresh(conv)
+
+    db.add(Message(conversation_id=conv.id, role="user", content=user_text))
+    db.add(Message(conversation_id=conv.id, role="assistant", content=assistant_text))
+    db.commit()
+    return conv.id
+
+
+# =====================================================================
+# AUTH
+# =====================================================================
+@app.post("/api/auth/register")
+async def register(request: Request, db: Session = Depends(get_db)):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Body request không hợp lệ (cần JSON)."}, status_code=400)
+
+    email = body.get("email", "").strip().lower()
+    password = body.get("password", "")
+
+    if not EMAIL_RE.match(email):
+        return JSONResponse({"error": "Email không hợp lệ."}, status_code=400)
+    if len(password) < 6:
+        return JSONResponse({"error": "Mật khẩu phải có ít nhất 6 ký tự."}, status_code=400)
+
+    if db.query(User).filter(User.email == email).first():
+        return JSONResponse({"error": "Email này đã được đăng ký."}, status_code=409)
+
+    user = User(email=email, password_hash=hash_password(password))
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    token = create_access_token(user.id)
+    return {"token": token, "email": user.email}
+
+
+@app.post("/api/auth/login")
+async def login(request: Request, db: Session = Depends(get_db)):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Body request không hợp lệ (cần JSON)."}, status_code=400)
+
+    email = body.get("email", "").strip().lower()
+    password = body.get("password", "")
+
+    user = db.query(User).filter(User.email == email).first()
+    if not user or not verify_password(password, user.password_hash):
+        return JSONResponse({"error": "Email hoặc mật khẩu không đúng."}, status_code=401)
+
+    token = create_access_token(user.id)
+    return {"token": token, "email": user.email}
+
+
+@app.post("/api/auth/google")
+async def google_login(request: Request, db: Session = Depends(get_db)):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Body request không hợp lệ (cần JSON)."}, status_code=400)
+
+    credential = body.get("credential", "")
+    if not credential:
+        return JSONResponse({"error": "Thiếu 'credential' (Google ID token)."}, status_code=400)
+
+    if not GOOGLE_CLIENT_ID:
+        return JSONResponse({"error": "Server chưa cấu hình GOOGLE_CLIENT_ID."}, status_code=400)
+
+    try:
+        payload = google_id_token.verify_oauth2_token(
+            credential, google_requests.Request(), GOOGLE_CLIENT_ID
+        )
+    except ValueError as e:
+        return JSONResponse({"error": f"Xác thực Google thất bại: {str(e)}"}, status_code=401)
+
+    email = payload.get("email", "").strip().lower()
+    if not email:
+        return JSONResponse({"error": "Không lấy được email từ tài khoản Google."}, status_code=400)
+
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        # Tài khoản mới đăng nhập lần đầu bằng Google -> tạo user không có mật khẩu
+        user = User(email=email, password_hash=None)
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+
+    token = create_access_token(user.id)
+    return {"token": token, "email": user.email}
+
+
+@app.get("/api/auth/me")
+async def me(user: User = Depends(get_current_user)):
+    return {"email": user.email, "settings": json.loads(user.settings_json or "{}")}
+
+
+# =====================================================================
+# CONVERSATIONS (lịch sử trò chuyện)
+# =====================================================================
+@app.get("/api/conversations")
+async def list_conversations(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    convs = (
+        db.query(Conversation)
+        .filter(Conversation.user_id == user.id)
+        .order_by(Conversation.updated_at.desc())
+        .limit(50)
+        .all()
+    )
+    return [
+        {"id": c.id, "title": c.title, "tab": c.tab, "updated_at": c.updated_at.isoformat()}
+        for c in convs
+    ]
+
+
+@app.get("/api/conversations/{conversation_id}")
+async def get_conversation(
+    conversation_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    conv = (
+        db.query(Conversation)
+        .filter(Conversation.id == conversation_id, Conversation.user_id == user.id)
+        .first()
+    )
+    if not conv:
+        return JSONResponse({"error": "Không tìm thấy cuộc trò chuyện."}, status_code=404)
+
+    return {
+        "id": conv.id,
+        "title": conv.title,
+        "tab": conv.tab,
+        "messages": [{"role": m.role, "content": m.content} for m in conv.messages],
+    }
+
+
+@app.delete("/api/conversations/{conversation_id}")
+async def delete_conversation(
+    conversation_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    conv = (
+        db.query(Conversation)
+        .filter(Conversation.id == conversation_id, Conversation.user_id == user.id)
+        .first()
+    )
+    if not conv:
+        return JSONResponse({"error": "Không tìm thấy cuộc trò chuyện."}, status_code=404)
+    db.delete(conv)
+    db.commit()
+    return {"ok": True}
+
+
+# =====================================================================
+# SETTINGS
+# =====================================================================
+@app.get("/api/settings")
+async def get_settings(user: User = Depends(get_current_user)):
+    return json.loads(user.settings_json or "{}")
+
+
+@app.put("/api/settings")
+async def update_settings(
+    request: Request, user: User = Depends(get_current_user), db: Session = Depends(get_db)
+):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Body request không hợp lệ (cần JSON)."}, status_code=400)
+
+    current = json.loads(user.settings_json or "{}")
+    current.update(body)
+    user.settings_json = json.dumps(current)
+    db.add(user)
+    db.commit()
+    return current
+
+
+# =====================================================================
+# 1. CHAT
+# =====================================================================
 @app.post("/api/chat")
-async def chat(request: Request):
+async def chat(
+    request: Request,
+    user=Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
     try:
         body = await request.json()
     except Exception:
@@ -72,6 +286,7 @@ async def chat(request: Request):
 
     message = body.get("message", "").strip()
     history = body.get("history", [])
+    conversation_id = body.get("conversation_id")
 
     if not message:
         return JSONResponse({"error": "Thiếu 'message'."}, status_code=400)
@@ -80,7 +295,10 @@ async def chat(request: Request):
 
     try:
         reply = call_groq(messages, CHAT_MODEL)
-        return {"reply": reply}
+        result = {"reply": reply}
+        if user:
+            result["conversation_id"] = save_turn(db, user, conversation_id, "chat", message, reply)
+        return result
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except requests.exceptions.HTTPError as e:
@@ -90,7 +308,9 @@ async def chat(request: Request):
         return JSONResponse({"error": f"Lỗi khi gọi dịch vụ chat: {str(e)}"}, status_code=502)
 
 
-# ---------- 2. ẢNH (Gemini "Nano Banana 2" qua Interactions API) ----------
+# =====================================================================
+# 2. ẢNH (Gemini "Nano Banana 2" qua Interactions API)
+# =====================================================================
 @app.post("/api/image")
 async def image(request: Request):
     try:
@@ -122,7 +342,6 @@ async def image(request: Request):
         resp.raise_for_status()
         data = resp.json()
 
-        # Cách 1: field tiện lợi output_image (ưu tiên)
         output_image = data.get("output_image")
         image_b64 = None
         mime = "image/png"
@@ -131,7 +350,6 @@ async def image(request: Request):
             image_b64 = output_image["data"]
             mime = output_image.get("mime_type", "image/png")
         else:
-            # Cách 2: fallback duyệt qua steps -> content blocks kiểu "image"
             for step in data.get("steps", []):
                 if step.get("type") != "model_output":
                     continue
@@ -159,7 +377,9 @@ async def image(request: Request):
         return JSONResponse({"error": f"Lỗi khi gọi dịch vụ ảnh: {str(e)}"}, status_code=502)
 
 
-# ---------- 3. VIDEO ----------
+# =====================================================================
+# 3. VIDEO
+# =====================================================================
 @app.post("/api/video")
 async def video(request: Request):
     try:
@@ -187,7 +407,9 @@ async def video(request: Request):
         return JSONResponse({"error": f"Lỗi khi tạo video: {str(e)}"}, status_code=502)
 
 
-# ---------- 4. CODE ASSISTANT ----------
+# =====================================================================
+# 4. CODE ASSISTANT
+# =====================================================================
 CODE_SYSTEM_PROMPT = (
     "Bạn là một trợ lý lập trình chuyên nghiệp, giống GitHub Copilot. "
     "Khi nhận yêu cầu, hãy viết code hoàn chỉnh, chạy được ngay, theo đúng ngôn ngữ "
@@ -199,7 +421,11 @@ CODE_SYSTEM_PROMPT = (
 
 
 @app.post("/api/code")
-async def code_assistant(request: Request):
+async def code_assistant(
+    request: Request,
+    user=Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
     try:
         body = await request.json()
     except Exception:
@@ -208,6 +434,7 @@ async def code_assistant(request: Request):
     prompt = body.get("prompt", "").strip()
     language = body.get("language", "").strip()
     history = body.get("history", [])
+    conversation_id = body.get("conversation_id")
 
     if not prompt:
         return JSONResponse({"error": "Thiếu 'prompt'."}, status_code=400)
@@ -222,7 +449,10 @@ async def code_assistant(request: Request):
 
     try:
         reply = call_groq(messages, CODE_MODEL, temperature=0.3)
-        return {"reply": reply}
+        result = {"reply": reply}
+        if user:
+            result["conversation_id"] = save_turn(db, user, conversation_id, "code", prompt, reply)
+        return result
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except requests.exceptions.HTTPError as e:
