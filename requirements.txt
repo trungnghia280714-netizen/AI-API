@@ -6,3 +6,4 @@ sqlalchemy==2.0.35
 psycopg2-binary==2.9.9
 pyjwt==2.9.0
 passlib==1.7.4
+google-auth==2.34.0
