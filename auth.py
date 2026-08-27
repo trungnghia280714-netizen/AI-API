@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from database import User, get_db
 
-# Đổi JWT_SECRET này trên Render (Environment) trước khi dùng thật, đừng để mặc định
+
 JWT_SECRET = os.environ.get("JWT_SECRET", "doi-secret-nay-truoc-khi-deploy-that")
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_DAYS = 30
