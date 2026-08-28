@@ -28,6 +28,7 @@ HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY", "")
 
 CHAT_MODEL = os.environ.get("CHAT_MODEL", "openai/gpt-oss-120b")
 CODE_MODEL = os.environ.get("CODE_MODEL", "openai/gpt-oss-120b")
+VISION_MODEL = os.environ.get("VISION_MODEL", "qwen/qwen3.6-27b")  # model hiểu ảnh của Groq
 # Gemini image (Nano Banana 2) không có hạn mức free -> dùng Pollinations (model Flux, miễn phí)
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "flux")
 VIDEO_MODEL = os.environ.get("VIDEO_MODEL", "Wan-AI/Wan2.2-TI2V-5B")
@@ -306,6 +307,56 @@ async def chat(
         return JSONResponse({"error": f"Lỗi khi gọi dịch vụ chat: {detail or str(e)}"}, status_code=502)
     except requests.exceptions.RequestException as e:
         return JSONResponse({"error": f"Lỗi khi gọi dịch vụ chat: {str(e)}"}, status_code=502)
+
+
+# =====================================================================
+# 1b. VISION (hỏi AI về nội dung ảnh đính kèm - dùng model vision của Groq)
+# =====================================================================
+@app.post("/api/vision")
+async def vision(
+    request: Request,
+    user=Depends(get_optional_user),
+    db: Session = Depends(get_db),
+):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Body request không hợp lệ (cần JSON)."}, status_code=400)
+
+    prompt = body.get("prompt", "").strip() or "Mô tả và phân tích nội dung ảnh này."
+    image_base64 = body.get("image_base64", "")
+    mime = body.get("mime", "image/jpeg")
+    conversation_id = body.get("conversation_id")
+
+    if not image_base64:
+        return JSONResponse({"error": "Thiếu 'image_base64'."}, status_code=400)
+
+    if not GROQ_API_KEY:
+        return JSONResponse({"error": "Server chưa cấu hình GROQ_API_KEY."}, status_code=400)
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_base64}"}},
+            ],
+        }
+    ]
+
+    try:
+        reply = call_groq(messages, VISION_MODEL)
+        result = {"reply": reply}
+        if user:
+            result["conversation_id"] = save_turn(
+                db, user, conversation_id, "chat", f"[Ảnh đính kèm] {prompt}", reply
+            )
+        return result
+    except requests.exceptions.HTTPError as e:
+        detail = extract_groq_error(e)
+        return JSONResponse({"error": f"Lỗi khi phân tích ảnh: {detail or str(e)}"}, status_code=502)
+    except requests.exceptions.RequestException as e:
+        return JSONResponse({"error": f"Lỗi khi phân tích ảnh: {str(e)}"}, status_code=502)
 
 
 # =====================================================================
