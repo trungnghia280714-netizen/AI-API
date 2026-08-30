@@ -1,135 +1,47 @@
 import os
 from datetime import datetime
 
-from sqlalchemy import (
-    create_engine,
-    Column,
-    Integer,
-    String,
-    Text,
-    DateTime,
-    ForeignKey,
-)
-from sqlalchemy.orm import (
-    declarative_base,
-    sessionmaker,
-    relationship,
-)
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./app.db")
 
-DATABASE_URL = os.environ.get(
-    "DATABASE_URL",
-    "sqlite:///./app.db"
-)
-
+# Render cấp URL Postgres dạng "postgres://" nhưng SQLAlchemy cần "postgresql://"
 if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace(
-        "postgres://",
-        "postgresql://",
-        1
-    )
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-connect_args = (
-    {"check_same_thread": False}
-    if DATABASE_URL.startswith("sqlite")
-    else {}
-)
-
-engine = create_engine(
-    DATABASE_URL,
-    connect_args=connect_args,
-    pool_pre_ping=True,
-)
-
-SessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine,
-)
-
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(
-        Integer,
-        primary_key=True,
-        index=True
-    )
-
-    email = Column(
-        String,
-        unique=True,
-        index=True,
-        nullable=False
-    )
-
-    password_hash = Column(
-        String,
-        nullable=True
-    )
-
-    created_at = Column(
-        DateTime,
-        default=datetime.utcnow
-    )
-
-    settings_json = Column(
-        Text,
-        default="{}"
-    )
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String, unique=True, index=True, nullable=False)
+    password_hash = Column(String, nullable=True)  # NULL nếu tài khoản đăng nhập bằng Google
+    created_at = Column(DateTime, default=datetime.utcnow)
+    settings_json = Column(Text, default="{}")  # lưu cài đặt (theme, v.v.) dạng JSON string
+    plan = Column(String, default="free")  # "free" / "inteligent_cold" / "inteligent_super_cold"
 
     conversations = relationship(
-        "Conversation",
-        back_populates="user",
-        cascade="all, delete-orphan",
+        "Conversation", back_populates="user", cascade="all, delete-orphan"
     )
 
 
 class Conversation(Base):
     __tablename__ = "conversations"
 
-    id = Column(
-        Integer,
-        primary_key=True,
-        index=True
-    )
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    tab = Column(String, default="chat")  # "chat" hoặc "code"
+    title = Column(String, default="Cuộc trò chuyện mới")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    user_id = Column(
-        Integer,
-        ForeignKey("users.id"),
-        nullable=False,
-        index=True
-    )
-
-    tab = Column(
-        String,
-        default="chat"
-    )
-
-    title = Column(
-        String,
-        default="Cuộc trò chuyện mới"
-    )
-
-    created_at = Column(
-        DateTime,
-        default=datetime.utcnow
-    )
-
-    updated_at = Column(
-        DateTime,
-        default=datetime.utcnow,
-        onupdate=datetime.utcnow
-    )
-
-    user = relationship(
-        "User",
-        back_populates="conversations"
-    )
-
+    user = relationship("User", back_populates="conversations")
     messages = relationship(
         "Message",
         back_populates="conversation",
@@ -141,38 +53,24 @@ class Conversation(Base):
 class Message(Base):
     __tablename__ = "messages"
 
-    id = Column(
-        Integer,
-        primary_key=True,
-        index=True
-    )
+    id = Column(Integer, primary_key=True, index=True)
+    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False)
+    role = Column(String, nullable=False)  # "user" hoặc "assistant"
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
-    conversation_id = Column(
-        Integer,
-        ForeignKey("conversations.id"),
-        nullable=False,
-        index=True
-    )
+    conversation = relationship("Conversation", back_populates="messages")
 
-    role = Column(
-        String,
-        nullable=False
-    )
 
-    content = Column(
-        Text,
-        nullable=False
-    )
+class UsageLog(Base):
+    """Đếm số lần dùng mỗi tính năng trong 1 ngày, theo từng user -> áp dụng hạn mức gói free."""
+    __tablename__ = "usage_logs"
 
-    created_at = Column(
-        DateTime,
-        default=datetime.utcnow
-    )
-
-    conversation = relationship(
-        "Conversation",
-        back_populates="messages"
-    )
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    feature = Column(String, nullable=False)  # "chat" / "code" / "image" / "video"
+    usage_date = Column(String, nullable=False)  # "YYYY-MM-DD" (giờ UTC)
+    count = Column(Integer, default=0)
 
 
 def init_db():
@@ -181,7 +79,6 @@ def init_db():
 
 def get_db():
     db = SessionLocal()
-
     try:
         yield db
     finally:
