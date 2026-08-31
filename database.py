@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey
+from sqlalchemy import create_engine, text, Column, Integer, String, Text, DateTime, ForeignKey
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./app.db")
@@ -75,6 +75,13 @@ class UsageLog(Base):
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+    # create_all() chỉ tạo BẢNG MỚI, không tự thêm CỘT MỚI vào bảng đã tồn tại.
+    # Tự vá các cột có thể bị thiếu do nâng cấp code sau khi bảng đã được tạo từ trước.
+    try:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS plan VARCHAR DEFAULT 'free'"))
+    except Exception:
+        pass  # bỏ qua nếu DB không hỗ trợ cú pháp này (vd: SQLite) hoặc cột đã tồn tại
 
 
 def get_db():
