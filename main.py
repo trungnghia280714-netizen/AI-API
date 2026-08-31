@@ -212,23 +212,28 @@ async def google_login(request: Request, db: Session = Depends(get_db)):
         payload = google_id_token.verify_oauth2_token(
             credential, google_requests.Request(), GOOGLE_CLIENT_ID
         )
+
+        email = payload.get("email", "").strip().lower()
+        if not email:
+            return JSONResponse({"error": "Không lấy được email từ tài khoản Google."}, status_code=400)
+
+        user = db.query(User).filter(User.email == email).first()
+        if not user:
+            # Tài khoản mới đăng nhập lần đầu bằng Google -> tạo user không có mật khẩu
+            user = User(email=email, password_hash=None)
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+
+        token = create_access_token(user.id)
+        return {"token": token, "email": user.email}
+
     except ValueError as e:
         return JSONResponse({"error": f"Xác thực Google thất bại: {str(e)}"}, status_code=401)
-
-    email = payload.get("email", "").strip().lower()
-    if not email:
-        return JSONResponse({"error": "Không lấy được email từ tài khoản Google."}, status_code=400)
-
-    user = db.query(User).filter(User.email == email).first()
-    if not user:
-        # Tài khoản mới đăng nhập lần đầu bằng Google -> tạo user không có mật khẩu
-        user = User(email=email, password_hash=None)
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-
-    token = create_access_token(user.id)
-    return {"token": token, "email": user.email}
+    except Exception as e:
+        # Bắt mọi lỗi bất ngờ (vd: DB thiếu cột, mất kết nối...) để luôn trả JSON có CORS header,
+        # tránh trình duyệt hiểu nhầm thành lỗi CORS khi server crash không kiểm soát.
+        return JSONResponse({"error": f"Lỗi máy chủ khi đăng nhập Google: {str(e)}"}, status_code=500)
 
 
 @app.get("/api/auth/me")
