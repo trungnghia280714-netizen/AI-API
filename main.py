@@ -5,6 +5,7 @@ import os
 import re
 import time
 import urllib.parse
+from datetime import date
 
 import requests
 from fastapi import Depends, FastAPI, Request
@@ -22,22 +23,29 @@ from auth import (
     verify_password,
 )
 from database import Conversation, Message, UsageLog, User, get_db, init_db
-from datetime import datetime, date
 
 # ---------- Cấu hình từ biến môi trường (KHÔNG hardcode key) ----------
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-POLLINATIONS_API_KEY = os.environ.get("POLLINATIONS_API_KEY", "")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")  # dùng cho Veo 3.1 (tạo video)
+# Mỗi biến có thể chứa NHIỀU key cách nhau bằng dấu phẩy, vd:
+# DEEPSEEK_API_KEY=key1,key2,key3
+# -> khi 1 key bị giới hạn (429) hoặc lỗi xác thực, tự động thử key kế tiếp.
+def _parse_keys(env_name: str) -> list:
+    raw = os.environ.get(env_name, "")
+    return [k.strip() for k in raw.split(",") if k.strip()]
 
-CHAT_MODEL = os.environ.get("CHAT_MODEL", "openai/gpt-oss-120b")
-CODE_MODEL = os.environ.get("CODE_MODEL", "openai/gpt-oss-120b")
-VISION_MODEL = os.environ.get("VISION_MODEL", "qwen/qwen3.6-27b")  # model hiểu ảnh của Groq
-# Gemini image (Nano Banana 2) không có hạn mức free -> dùng Pollinations (model Flux, miễn phí)
-IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "flux")
-# Veo 3.1 Lite: model video rẻ nhất của Google, dùng chung GEMINI_API_KEY
+NVIDIA_API_KEYS = _parse_keys("NVIDIA_API_KEY")         # Chat (NVIDIA NIM - free tier khá rộng)
+ANTHROPIC_API_KEYS = _parse_keys("ANTHROPIC_API_KEY")   # Code + Vision (Claude)
+OPENAI_API_KEYS = _parse_keys("OPENAI_API_KEY")         # Ảnh
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")   # Video (Veo) - chưa xoay vòng
+
+CHAT_MODEL = os.environ.get("CHAT_MODEL", "deepseek-ai/deepseek-v4-pro-0813")
+CODE_MODEL = os.environ.get("CODE_MODEL", "claude-sonnet-5")
+VISION_MODEL = os.environ.get("VISION_MODEL", "claude-sonnet-5")
+IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "gpt-image-2")
 VIDEO_MODEL = os.environ.get("VIDEO_MODEL", "veo-3.1-lite-generate-preview")
 
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+OPENAI_IMAGE_URL = "https://api.openai.com/v1/images/generations"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -46,8 +54,6 @@ GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 # Hạn mức gói free / ngày (theo tài khoản đã đăng nhập)
 DAILY_LIMITS = {"chat": 40, "code": 5, "image": 5, "video": 1}
 FEATURE_NAMES_VI = {"chat": "Chat", "code": "Code Assistant", "image": "Tạo ảnh", "video": "Tạo video"}
-
-
 UNLIMITED_PLANS = {"inteligent_cold", "inteligent_super_cold"}
 
 
@@ -56,7 +62,6 @@ def check_and_increment_usage(db: Session, user, feature: str):
     Nếu user=None (khách chưa đăng nhập) hoặc user có gói không giới hạn -> bỏ qua, trả về None."""
     if not user:
         return None
-
     if getattr(user, "plan", "free") in UNLIMITED_PLANS:
         return None
 
@@ -83,6 +88,7 @@ def check_and_increment_usage(db: Session, user, feature: str):
     db.commit()
     return None
 
+
 app = FastAPI(title="INTELIGENT Backend")
 
 app.add_middleware(
@@ -99,25 +105,85 @@ def on_startup():
     init_db()
 
 
-def call_groq(messages: list, model: str, temperature: float = 0.7):
-    if not GROQ_API_KEY:
-        raise ValueError("Server chưa cấu hình GROQ_API_KEY.")
+# =====================================================================
+# Hàm gọi các AI provider trả phí
+# =====================================================================
+def call_nvidia(messages: list, model: str, temperature: float = 0.7):
+    """Chat - NVIDIA NIM, API kiểu OpenAI-compatible (build.nvidia.com).
+    Tự động xoay vòng qua các key trong NVIDIA_API_KEYS nếu 1 key bị lỗi 429/401."""
+    if not NVIDIA_API_KEYS:
+        raise ValueError("Server chưa cấu hình NVIDIA_API_KEY.")
 
-    resp = requests.post(
-        GROQ_URL,
-        headers={
-            "Authorization": f"Bearer {GROQ_API_KEY}",
-            "Content-Type": "application/json",
-        },
-        json={"model": model, "messages": messages, "temperature": temperature},
-        timeout=60,
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    return data["choices"][0]["message"]["content"]
+    last_error = None
+    for key in NVIDIA_API_KEYS:
+        try:
+            resp = requests.post(
+                NVIDIA_URL,
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "top_p": 0.95,
+                    "max_tokens": 4096,
+                },
+                timeout=60,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return data["choices"][0]["message"]["content"]
+        except requests.exceptions.HTTPError as e:
+            last_error = e
+            if e.response is not None and e.response.status_code in (401, 429):
+                continue  # key này hết hạn mức hoặc sai -> thử key kế tiếp
+            raise
+    raise last_error
 
 
-def extract_groq_error(e: requests.exceptions.HTTPError) -> str:
+def extract_openai_style_error(e: requests.exceptions.HTTPError) -> str:
+    try:
+        return e.response.json().get("error", {}).get("message", "")
+    except Exception:
+        return ""
+
+
+def call_claude(system_prompt: str, messages: list, model: str, max_tokens: int = 4096):
+    """Code + Vision - Claude API (Anthropic). messages theo format Anthropic Messages API
+    (content có thể là string hoặc list block cho vision).
+    Tự động xoay vòng qua các key trong ANTHROPIC_API_KEYS nếu 1 key bị lỗi 429/401."""
+    if not ANTHROPIC_API_KEYS:
+        raise ValueError("Server chưa cấu hình ANTHROPIC_API_KEY.")
+
+    body = {"model": model, "max_tokens": max_tokens, "messages": messages}
+    if system_prompt:
+        body["system"] = system_prompt
+
+    last_error = None
+    for key in ANTHROPIC_API_KEYS:
+        try:
+            resp = requests.post(
+                ANTHROPIC_URL,
+                headers={
+                    "x-api-key": key,
+                    "anthropic-version": "2023-06-01",
+                    "Content-Type": "application/json",
+                },
+                json=body,
+                timeout=90,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            text_parts = [b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"]
+            return "".join(text_parts)
+        except requests.exceptions.HTTPError as e:
+            last_error = e
+            if e.response is not None and e.response.status_code in (401, 429):
+                continue
+            raise
+    raise last_error
+
+
+def extract_claude_error(e: requests.exceptions.HTTPError) -> str:
     try:
         return e.response.json().get("error", {}).get("message", "")
     except Exception:
@@ -219,7 +285,6 @@ async def google_login(request: Request, db: Session = Depends(get_db)):
 
         user = db.query(User).filter(User.email == email).first()
         if not user:
-            # Tài khoản mới đăng nhập lần đầu bằng Google -> tạo user không có mật khẩu
             user = User(email=email, password_hash=None)
             db.add(user)
             db.commit()
@@ -231,8 +296,6 @@ async def google_login(request: Request, db: Session = Depends(get_db)):
     except ValueError as e:
         return JSONResponse({"error": f"Xác thực Google thất bại: {str(e)}"}, status_code=401)
     except Exception as e:
-        # Bắt mọi lỗi bất ngờ (vd: DB thiếu cột, mất kết nối...) để luôn trả JSON có CORS header,
-        # tránh trình duyệt hiểu nhầm thành lỗi CORS khi server crash không kiểm soát.
         return JSONResponse({"error": f"Lỗi máy chủ khi đăng nhập Google: {str(e)}"}, status_code=500)
 
 
@@ -325,7 +388,7 @@ async def update_settings(
 
 
 # =====================================================================
-# 1. CHAT
+# 1. CHAT (DeepSeek)
 # =====================================================================
 @app.post("/api/chat")
 async def chat(
@@ -352,7 +415,7 @@ async def chat(
     messages = history + [{"role": "user", "content": message}]
 
     try:
-        reply = call_groq(messages, CHAT_MODEL)
+        reply = call_nvidia(messages, CHAT_MODEL)
         result = {"reply": reply}
         if user:
             result["conversation_id"] = save_turn(db, user, conversation_id, "chat", message, reply)
@@ -360,14 +423,14 @@ async def chat(
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except requests.exceptions.HTTPError as e:
-        detail = extract_groq_error(e)
+        detail = extract_openai_style_error(e)
         return JSONResponse({"error": f"Lỗi khi gọi dịch vụ chat: {detail or str(e)}"}, status_code=502)
     except requests.exceptions.RequestException as e:
         return JSONResponse({"error": f"Lỗi khi gọi dịch vụ chat: {str(e)}"}, status_code=502)
 
 
 # =====================================================================
-# 1b. VISION (hỏi AI về nội dung ảnh đính kèm - dùng model vision của Groq)
+# 1b. VISION (Claude - hỏi AI về nội dung ảnh đính kèm)
 # =====================================================================
 @app.post("/api/vision")
 async def vision(
@@ -388,9 +451,6 @@ async def vision(
     if not image_base64:
         return JSONResponse({"error": "Thiếu 'image_base64'."}, status_code=400)
 
-    if not GROQ_API_KEY:
-        return JSONResponse({"error": "Server chưa cấu hình GROQ_API_KEY."}, status_code=400)
-
     usage_error = check_and_increment_usage(db, user, "chat")
     if usage_error:
         return JSONResponse({"error": usage_error}, status_code=429)
@@ -399,53 +459,35 @@ async def vision(
         {
             "role": "user",
             "content": [
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": mime, "data": image_base64},
+                },
                 {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_base64}"}},
             ],
         }
     ]
 
     try:
-        reply = call_groq(messages, VISION_MODEL)
+        reply = call_claude("", messages, VISION_MODEL)
         result = {"reply": reply}
         if user:
             result["conversation_id"] = save_turn(
                 db, user, conversation_id, "chat", f"[Ảnh đính kèm] {prompt}", reply
             )
         return result
+    except ValueError as e:
+        return JSONResponse({"error": str(e)}, status_code=400)
     except requests.exceptions.HTTPError as e:
-        detail = extract_groq_error(e)
+        detail = extract_claude_error(e)
         return JSONResponse({"error": f"Lỗi khi phân tích ảnh: {detail or str(e)}"}, status_code=502)
     except requests.exceptions.RequestException as e:
         return JSONResponse({"error": f"Lỗi khi phân tích ảnh: {str(e)}"}, status_code=502)
 
 
 # =====================================================================
-# 2. ẢNH (Pollinations - model Flux, miễn phí)
+# 2. ẢNH (OpenAI - GPT Image 2)
 # =====================================================================
-def translate_prompt_to_english(prompt: str) -> str:
-    """Dịch/diễn giải prompt sang tiếng Anh chi tiết cho model Flux hiểu đúng ý hơn.
-    Nếu Groq lỗi vì bất kỳ lý do gì, âm thầm fallback về prompt gốc."""
-    if not GROQ_API_KEY:
-        return prompt
-    try:
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "Dịch mô tả ảnh sau sang tiếng Anh, giữ đúng chủ thể và ý nghĩa gốc, "
-                    "có thể bổ sung vài chi tiết hình ảnh (ánh sáng, góc chụp, phong cách) "
-                    "để ảnh đẹp hơn nhưng KHÔNG được đổi chủ thể chính. "
-                    "Chỉ trả về câu mô tả tiếng Anh, không giải thích gì thêm."
-                ),
-            },
-            {"role": "user", "content": prompt},
-        ]
-        return call_groq(messages, CHAT_MODEL, temperature=0.4).strip()
-    except Exception:
-        return prompt
-
-
 @app.post("/api/image")
 async def image(
     request: Request,
@@ -458,46 +500,49 @@ async def image(
         return JSONResponse({"error": "Body request không hợp lệ (cần JSON)."}, status_code=400)
 
     prompt = body.get("prompt", "").strip()
-    width = body.get("width", 1024)
-    height = body.get("height", 1024)
-
     if not prompt:
         return JSONResponse({"error": "Thiếu 'prompt'."}, status_code=400)
+
+    if not OPENAI_API_KEYS:
+        return JSONResponse({"error": "Server chưa cấu hình OPENAI_API_KEY."}, status_code=400)
 
     usage_error = check_and_increment_usage(db, user, "image")
     if usage_error:
         return JSONResponse({"error": usage_error}, status_code=429)
 
-    final_prompt = translate_prompt_to_english(prompt)
-    encoded = urllib.parse.quote(final_prompt)
+    last_error = None
+    for key in OPENAI_API_KEYS:
+        try:
+            resp = requests.post(
+                OPENAI_IMAGE_URL,
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={"model": IMAGE_MODEL, "prompt": prompt, "size": "1024x1024", "n": 1},
+                timeout=120,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            items = data.get("data", [])
+            if not items or not items[0].get("b64_json"):
+                return JSONResponse({"error": "Không nhận được ảnh từ OpenAI."}, status_code=502)
+            return {"image_base64": items[0]["b64_json"], "mime": "image/png"}
+        except requests.exceptions.HTTPError as e:
+            last_error = e
+            if e.response is not None and e.response.status_code in (401, 429):
+                continue  # thử key kế tiếp
+            detail = extract_openai_style_error(e)
+            return JSONResponse({"error": f"Lỗi khi gọi dịch vụ ảnh: {detail or str(e)}"}, status_code=502)
+        except requests.exceptions.RequestException as e:
+            return JSONResponse({"error": f"Lỗi khi gọi dịch vụ ảnh: {str(e)}"}, status_code=502)
 
-    params = {
-        "model": IMAGE_MODEL,  # flux
-        "width": width,
-        "height": height,
-        "nologo": "true",
-        "safe": "false",
-    }
-    if POLLINATIONS_API_KEY:
-        params["key"] = POLLINATIONS_API_KEY
-
-    query = urllib.parse.urlencode(params)
-    image_url = f"https://image.pollinations.ai/prompt/{encoded}?{query}"
-
-    try:
-        # Tải ảnh về rồi trả base64 cho frontend, để đồng nhất với các route khác
-        # và tránh lộ trực tiếp URL công khai (có thể chứa key) ra trình duyệt.
-        img_resp = requests.get(image_url, timeout=60)
-        img_resp.raise_for_status()
-        mime = img_resp.headers.get("content-type", "image/jpeg")
-        image_b64 = base64.b64encode(img_resp.content).decode("utf-8")
-        return {"image_base64": image_b64, "mime": mime}
-    except requests.exceptions.RequestException as e:
-        return JSONResponse({"error": f"Lỗi khi gọi dịch vụ ảnh: {str(e)}"}, status_code=502)
+    detail = extract_openai_style_error(last_error) if last_error else ""
+    return JSONResponse(
+        {"error": f"Tất cả key OpenAI đều bị giới hạn hoặc lỗi: {detail or str(last_error)}"},
+        status_code=502,
+    )
 
 
 # =====================================================================
-# 3. VIDEO (Google Veo 3.1 qua Gemini API - TRẢ PHÍ theo giây video)
+# 3. VIDEO (Google Veo 3.1 qua Gemini API)
 # =====================================================================
 def _generate_veo_video_sync(prompt: str):
     """Chạy đồng bộ (blocking) trong thread riêng - gọi Veo, poll đến khi xong, tải video về.
@@ -517,7 +562,7 @@ def _generate_veo_video_sync(prompt: str):
         if not operation_name:
             return None, "Không nhận được operation từ Veo."
 
-        max_wait_seconds = 280  # ~4.5 phút, Veo có thể mất tới vài phút
+        max_wait_seconds = 280
         interval_seconds = 10
         elapsed = 0
         status_data = None
@@ -585,7 +630,6 @@ async def video(
     if usage_error:
         return JSONResponse({"error": usage_error}, status_code=429)
 
-    # Chạy trong thread riêng để không chặn event loop trong lúc poll (có thể mất vài phút)
     video_bytes, error = await asyncio.to_thread(_generate_veo_video_sync, prompt)
 
     if error:
@@ -596,7 +640,7 @@ async def video(
 
 
 # =====================================================================
-# 4. CODE ASSISTANT
+# 4. CODE ASSISTANT (Claude)
 # =====================================================================
 CODE_SYSTEM_PROMPT = (
     "Bạn là một trợ lý lập trình chuyên nghiệp, giống GitHub Copilot. "
@@ -633,14 +677,10 @@ async def code_assistant(
 
     user_content = f"Ngôn ngữ mong muốn: {language}\nYêu cầu: {prompt}" if language else prompt
 
-    messages = (
-        [{"role": "system", "content": CODE_SYSTEM_PROMPT}]
-        + history
-        + [{"role": "user", "content": user_content}]
-    )
+    messages = history + [{"role": "user", "content": user_content}]
 
     try:
-        reply = call_groq(messages, CODE_MODEL, temperature=0.3)
+        reply = call_claude(CODE_SYSTEM_PROMPT, messages, CODE_MODEL)
         result = {"reply": reply}
         if user:
             result["conversation_id"] = save_turn(db, user, conversation_id, "code", prompt, reply)
@@ -648,7 +688,7 @@ async def code_assistant(
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except requests.exceptions.HTTPError as e:
-        detail = extract_groq_error(e)
+        detail = extract_claude_error(e)
         return JSONResponse({"error": f"Lỗi khi gọi dịch vụ code: {detail or str(e)}"}, status_code=502)
     except requests.exceptions.RequestException as e:
         return JSONResponse({"error": f"Lỗi khi gọi dịch vụ code: {str(e)}"}, status_code=502)
