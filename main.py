@@ -37,7 +37,7 @@ ANTHROPIC_API_KEYS = _parse_keys("ANTHROPIC_API_KEY")   # Code + Vision (Claude)
 OPENAI_API_KEYS = _parse_keys("OPENAI_API_KEY")         # Ảnh
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")   # Video (Veo) - chưa xoay vòng
 
-CHAT_MODEL = os.environ.get("CHAT_MODEL", "deepseek-ai/deepseek-v4-pro-0813")
+CHAT_MODEL = os.environ.get("CHAT_MODEL", "deepseek-ai/deepseek-v4-flash-0731")
 CODE_MODEL = os.environ.get("CODE_MODEL", "claude-sonnet-5")
 VISION_MODEL = os.environ.get("VISION_MODEL", "claude-sonnet-5")
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "gpt-image-2")
@@ -108,11 +108,22 @@ def on_startup():
 # =====================================================================
 # Hàm gọi các AI provider trả phí
 # =====================================================================
-def call_nvidia(messages: list, model: str, temperature: float = 0.7):
+def call_nvidia(messages: list, model: str, temperature: float = 0.7, thinking: bool = False):
     """Chat - NVIDIA NIM, API kiểu OpenAI-compatible (build.nvidia.com).
-    Tự động xoay vòng qua các key trong NVIDIA_API_KEYS nếu 1 key bị lỗi 429/401."""
+    Tự động xoay vòng qua các key trong NVIDIA_API_KEYS nếu 1 key bị lỗi 429/401.
+    Nếu thinking=True, bật chế độ suy luận (reasoning) và gộp phần suy luận vào đầu câu trả lời."""
     if not NVIDIA_API_KEYS:
         raise ValueError("Server chưa cấu hình NVIDIA_API_KEY.")
+
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "top_p": 0.95,
+        "max_tokens": 8192,
+    }
+    if thinking:
+        payload["extra_body"] = {"chat_template_kwargs": {"thinking": True, "reasoning_effort": "high"}}
 
     last_error = None
     for key in NVIDIA_API_KEYS:
@@ -120,18 +131,17 @@ def call_nvidia(messages: list, model: str, temperature: float = 0.7):
             resp = requests.post(
                 NVIDIA_URL,
                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={
-                    "model": model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "top_p": 0.95,
-                    "max_tokens": 4096,
-                },
-                timeout=120,  # model pro có thể chậm, nới thời gian chờ
+                json=payload,
+                timeout=120,  # model có thể chậm khi bật suy luận, nới thời gian chờ
             )
             resp.raise_for_status()
             data = resp.json()
-            return data["choices"][0]["message"]["content"]
+            msg = data["choices"][0]["message"]
+            content = msg.get("content", "")
+            reasoning = msg.get("reasoning") or msg.get("reasoning_content")
+            if reasoning:
+                content = f"*Suy luận:* {reasoning}\n\n---\n\n{content}"
+            return content
         except requests.exceptions.HTTPError as e:
             last_error = e
             if e.response is not None and e.response.status_code in (401, 429):
