@@ -127,7 +127,7 @@ def call_nvidia(messages: list, model: str, temperature: float = 0.7):
                     "top_p": 0.95,
                     "max_tokens": 4096,
                 },
-                timeout=60,
+                timeout=120,  # model pro có thể chậm, nới thời gian chờ
             )
             resp.raise_for_status()
             data = resp.json()
