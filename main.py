@@ -32,20 +32,24 @@ def _parse_keys(env_name: str) -> list:
     raw = os.environ.get(env_name, "")
     return [k.strip() for k in raw.split(",") if k.strip()]
 
-NVIDIA_API_KEYS = _parse_keys("NVIDIA_API_KEY")         # Chat (NVIDIA NIM - free tier khá rộng)
-ANTHROPIC_API_KEYS = _parse_keys("ANTHROPIC_API_KEY")   # Code + Vision (Claude)
-OPENAI_API_KEYS = _parse_keys("OPENAI_API_KEY")         # Ảnh
+# Bluesminds: dịch vụ trung gian OpenAI-compatible, có model Chat (DeepSeek), Code (Claude) và Ảnh (GPT).
+# Tách riêng biến theo từng tính năng để dễ quản lý - dù dùng chung 1 tài khoản Bluesminds,
+# có thể đổi riêng từng cái sang nhà cung cấp khác sau này mà không ảnh hưởng các phần còn lại.
+DEEPSEEK_API_KEYS = _parse_keys("DEEPSEEK_API_KEY")  # Chat (qua Bluesminds)
+CLAUDE_API_KEYS = _parse_keys("CLAUDE_API_KEY")      # Code (qua Bluesminds)
+CHATGPT_API_KEYS = _parse_keys("CHATGPT_API_KEY")    # Ảnh (qua Bluesminds)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")   # Video (Veo) - chưa xoay vòng
 
-CHAT_MODEL = os.environ.get("CHAT_MODEL", "deepseek-ai/deepseek-v4-flash-0731")
-CODE_MODEL = os.environ.get("CODE_MODEL", "claude-sonnet-5")
-VISION_MODEL = os.environ.get("VISION_MODEL", "claude-sonnet-5")
+CHAT_MODEL = os.environ.get("CHAT_MODEL", "deepseek-v4-pro")  # Bluesminds chỉ có v3 / v4-pro
+CODE_MODEL = os.environ.get("CODE_MODEL", "claude-sonnet-4-5")  # kiểm tra đúng tên trong danh sách model Bluesminds
+VISION_MODEL = os.environ.get("VISION_MODEL", "claude-sonnet-4-5")
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "gpt-image-2")
 VIDEO_MODEL = os.environ.get("VIDEO_MODEL", "veo-3.1-lite-generate-preview")
 
-NVIDIA_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
-ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
-OPENAI_IMAGE_URL = "https://api.openai.com/v1/images/generations"
+# Bluesminds: dịch vụ trung gian OpenAI-compatible (không phải OpenAI/Anthropic/DeepSeek chính chủ)
+BLUESMINDS_BASE_URL = os.environ.get("BLUESMINDS_BASE_URL", "https://api.bluesminds.com/v1")
+OPENAI_IMAGE_URL = f"{BLUESMINDS_BASE_URL}/images/generations"
+BLUESMINDS_CHAT_URL = f"{BLUESMINDS_BASE_URL}/chat/completions"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -108,40 +112,31 @@ def on_startup():
 # =====================================================================
 # Hàm gọi các AI provider trả phí
 # =====================================================================
-def call_nvidia(messages: list, model: str, temperature: float = 0.7, thinking: bool = False):
-    """Chat - NVIDIA NIM, API kiểu OpenAI-compatible (build.nvidia.com).
-    Tự động xoay vòng qua các key trong NVIDIA_API_KEYS nếu 1 key bị lỗi 429/401.
-    Nếu thinking=True, bật chế độ suy luận (reasoning) và gộp phần suy luận vào đầu câu trả lời."""
-    if not NVIDIA_API_KEYS:
-        raise ValueError("Server chưa cấu hình NVIDIA_API_KEY.")
+def call_bluesminds(keys: list, messages: list, model: str, system_prompt: str = "",
+                     temperature: float = 0.7, max_tokens: int = 4096, key_error_msg: str = "key"):
+    """Gọi Bluesminds (API kiểu OpenAI-compatible) - dùng chung cho Chat (DeepSeek) và Code (Claude).
+    Tự động xoay vòng qua danh sách key nếu 1 key bị lỗi 429/401."""
+    if not keys:
+        raise ValueError(f"Server chưa cấu hình {key_error_msg}.")
 
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": temperature,
-        "top_p": 0.95,
-        "max_tokens": 8192,
-    }
-    if thinking:
-        payload["extra_body"] = {"chat_template_kwargs": {"thinking": True, "reasoning_effort": "high"}}
+    full_messages = list(messages)
+    if system_prompt:
+        full_messages = [{"role": "system", "content": system_prompt}] + full_messages
+
+    body = {"model": model, "messages": full_messages, "temperature": temperature, "max_tokens": max_tokens}
 
     last_error = None
-    for key in NVIDIA_API_KEYS:
+    for key in keys:
         try:
             resp = requests.post(
-                NVIDIA_URL,
+                BLUESMINDS_CHAT_URL,
                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json=payload,
-                timeout=120,  # model có thể chậm khi bật suy luận, nới thời gian chờ
+                json=body,
+                timeout=120,  # model pro có thể chậm, nới thời gian chờ
             )
             resp.raise_for_status()
             data = resp.json()
-            msg = data["choices"][0]["message"]
-            content = msg.get("content", "")
-            reasoning = msg.get("reasoning") or msg.get("reasoning_content")
-            if reasoning:
-                content = f"*Suy luận:* {reasoning}\n\n---\n\n{content}"
-            return content
+            return data["choices"][0]["message"]["content"]
         except requests.exceptions.HTTPError as e:
             last_error = e
             if e.response is not None and e.response.status_code in (401, 429):
@@ -158,39 +153,11 @@ def extract_openai_style_error(e: requests.exceptions.HTTPError) -> str:
 
 
 def call_claude(system_prompt: str, messages: list, model: str, max_tokens: int = 4096):
-    """Code + Vision - Claude API (Anthropic). messages theo format Anthropic Messages API
-    (content có thể là string hoặc list block cho vision).
-    Tự động xoay vòng qua các key trong ANTHROPIC_API_KEYS nếu 1 key bị lỗi 429/401."""
-    if not ANTHROPIC_API_KEYS:
-        raise ValueError("Server chưa cấu hình ANTHROPIC_API_KEY.")
-
-    body = {"model": model, "max_tokens": max_tokens, "messages": messages}
-    if system_prompt:
-        body["system"] = system_prompt
-
-    last_error = None
-    for key in ANTHROPIC_API_KEYS:
-        try:
-            resp = requests.post(
-                ANTHROPIC_URL,
-                headers={
-                    "x-api-key": key,
-                    "anthropic-version": "2023-06-01",
-                    "Content-Type": "application/json",
-                },
-                json=body,
-                timeout=90,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            text_parts = [b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"]
-            return "".join(text_parts)
-        except requests.exceptions.HTTPError as e:
-            last_error = e
-            if e.response is not None and e.response.status_code in (401, 429):
-                continue
-            raise
-    raise last_error
+    """Code + Vision - Claude (Sonnet) qua Bluesminds."""
+    return call_bluesminds(
+        CLAUDE_API_KEYS, messages, model,
+        system_prompt=system_prompt, max_tokens=max_tokens, key_error_msg="CLAUDE_API_KEY",
+    )
 
 
 def extract_claude_error(e: requests.exceptions.HTTPError) -> str:
@@ -425,7 +392,9 @@ async def chat(
     messages = history + [{"role": "user", "content": message}]
 
     try:
-        reply = call_nvidia(messages, CHAT_MODEL)
+        reply = call_bluesminds(
+            DEEPSEEK_API_KEYS, messages, CHAT_MODEL, key_error_msg="DEEPSEEK_API_KEY"
+        )
         result = {"reply": reply}
         if user:
             result["conversation_id"] = save_turn(db, user, conversation_id, "chat", message, reply)
@@ -469,11 +438,8 @@ async def vision(
         {
             "role": "user",
             "content": [
-                {
-                    "type": "image",
-                    "source": {"type": "base64", "media_type": mime, "data": image_base64},
-                },
                 {"type": "text", "text": prompt},
+                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_base64}"}},
             ],
         }
     ]
@@ -513,15 +479,15 @@ async def image(
     if not prompt:
         return JSONResponse({"error": "Thiếu 'prompt'."}, status_code=400)
 
-    if not OPENAI_API_KEYS:
-        return JSONResponse({"error": "Server chưa cấu hình OPENAI_API_KEY."}, status_code=400)
+    if not CHATGPT_API_KEYS:
+        return JSONResponse({"error": "Server chưa cấu hình CHATGPT_API_KEY."}, status_code=400)
 
     usage_error = check_and_increment_usage(db, user, "image")
     if usage_error:
         return JSONResponse({"error": usage_error}, status_code=429)
 
     last_error = None
-    for key in OPENAI_API_KEYS:
+    for key in CHATGPT_API_KEYS:
         try:
             resp = requests.post(
                 OPENAI_IMAGE_URL,
@@ -546,7 +512,7 @@ async def image(
 
     detail = extract_openai_style_error(last_error) if last_error else ""
     return JSONResponse(
-        {"error": f"Tất cả key OpenAI đều bị giới hạn hoặc lỗi: {detail or str(last_error)}"},
+        {"error": f"Tất cả key CHATGPT_API_KEY đều bị giới hạn hoặc lỗi: {detail or str(last_error)}"},
         status_code=502,
     )
 
