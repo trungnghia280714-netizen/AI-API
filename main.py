@@ -35,22 +35,25 @@ def _parse_keys(env_name: str) -> list:
 # Bluesminds: dịch vụ trung gian OpenAI-compatible, có model Chat (DeepSeek), Code (Claude) và Ảnh (GPT).
 # Tách riêng biến theo từng tính năng để dễ quản lý - dù dùng chung 1 tài khoản Bluesminds,
 # có thể đổi riêng từng cái sang nhà cung cấp khác sau này mà không ảnh hưởng các phần còn lại.
-DEEPSEEK_API_KEYS = _parse_keys("DEEPSEEK_API_KEY")  # Chat (qua Bluesminds)
-CLAUDE_API_KEYS = _parse_keys("CLAUDE_API_KEY")      # Code (qua Bluesminds)
-CHATGPT_API_KEYS = _parse_keys("CHATGPT_API_KEY")    # Ảnh (qua Bluesminds)
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")   # Video (Veo) - chưa xoay vòng
+DEEPSEEK_API_KEYS = _parse_keys("DEEPSEEK_API_KEY")  # Chat (qua Bluesminds/UnoRouter)
+CLAUDE_API_KEYS = _parse_keys("CLAUDE_API_KEY")      # Code (qua Bluesminds/UnoRouter)
+CHATGPT_API_KEYS = _parse_keys("CHATGPT_API_KEY")    # Ảnh (qua Bluesminds/UnoRouter)
+MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "")   # Video (MiniMax) - chưa xoay vòng
 
 CHAT_MODEL = os.environ.get("CHAT_MODEL", "deepseek-v4-pro")  # Bluesminds chỉ có v3 / v4-pro
 CODE_MODEL = os.environ.get("CODE_MODEL", "claude-sonnet-4-5")  # kiểm tra đúng tên trong danh sách model Bluesminds
 VISION_MODEL = os.environ.get("VISION_MODEL", "claude-sonnet-4-5")
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "gpt-image-2")
-VIDEO_MODEL = os.environ.get("VIDEO_MODEL", "veo-3.1-lite-generate-preview")
+VIDEO_MODEL = os.environ.get("VIDEO_MODEL", "MiniMax-H3")
 
-# Bluesminds: dịch vụ trung gian OpenAI-compatible (không phải OpenAI/Anthropic/DeepSeek chính chủ)
-BLUESMINDS_BASE_URL = os.environ.get("BLUESMINDS_BASE_URL", "https://api.bluesminds.com/v1")
+# Bluesminds/UnoRouter: dịch vụ trung gian OpenAI-compatible (không phải OpenAI/Anthropic/DeepSeek chính chủ)
+BLUESMINDS_BASE_URL = os.environ.get("BLUESMINDS_BASE_URL", "https://api.unorouter.com/v1")
 OPENAI_IMAGE_URL = f"{BLUESMINDS_BASE_URL}/images/generations"
 BLUESMINDS_CHAT_URL = f"{BLUESMINDS_BASE_URL}/chat/completions"
-GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
+# MiniMax chính chủ - nếu key của bạn thực chất là key UnoRouter (không phải MiniMax thật),
+# đổi biến môi trường MINIMAX_BASE_URL sang base URL của UnoRouter.
+MINIMAX_BASE_URL = os.environ.get("MINIMAX_BASE_URL", "https://api.minimax.io")
+
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
@@ -518,61 +521,64 @@ async def image(
 
 
 # =====================================================================
-# 3. VIDEO (Google Veo 3.1 qua Gemini API)
+# 3. VIDEO (MiniMax H3 - text-to-video)
 # =====================================================================
-def _generate_veo_video_sync(prompt: str):
-    """Chạy đồng bộ (blocking) trong thread riêng - gọi Veo, poll đến khi xong, tải video về.
+def _generate_minimax_video_sync(prompt: str):
+    """Chạy đồng bộ (blocking) trong thread riêng - tạo task ở MiniMax, poll đến khi xong, tải video về.
     Trả về (video_bytes, error_message). Chỉ 1 trong 2 giá trị khác None."""
-    if not GEMINI_API_KEY:
-        return None, "Server chưa cấu hình GEMINI_API_KEY."
+    if not MINIMAX_API_KEY:
+        return None, "Server chưa cấu hình MINIMAX_API_KEY."
+
+    headers = {"Authorization": f"Bearer {MINIMAX_API_KEY}", "Content-Type": "application/json"}
 
     try:
-        start_resp = requests.post(
-            f"{GEMINI_BASE_URL}/models/{VIDEO_MODEL}:predictLongRunning",
-            headers={"x-goog-api-key": GEMINI_API_KEY, "Content-Type": "application/json"},
-            json={"instances": [{"prompt": prompt}]},
+        create_resp = requests.post(
+            f"{MINIMAX_BASE_URL}/v2/video_generation",
+            headers=headers,
+            json={
+                "model": VIDEO_MODEL,
+                "content": [{"type": "text", "text": prompt}],
+                "resolution": "768P",
+                "duration": 6,
+                "ratio": "16:9",
+            },
             timeout=30,
         )
-        start_resp.raise_for_status()
-        operation_name = start_resp.json().get("name")
-        if not operation_name:
-            return None, "Không nhận được operation từ Veo."
+        create_resp.raise_for_status()
+        task_id = create_resp.json().get("task_id")
+        if not task_id:
+            return None, "Không nhận được task_id từ MiniMax."
 
         max_wait_seconds = 280
-        interval_seconds = 10
+        interval_seconds = 8
         elapsed = 0
-        status_data = None
+        task_data = None
 
         while elapsed < max_wait_seconds:
             time.sleep(interval_seconds)
             elapsed += interval_seconds
             status_resp = requests.get(
-                f"{GEMINI_BASE_URL}/{operation_name}",
-                headers={"x-goog-api-key": GEMINI_API_KEY},
+                f"{MINIMAX_BASE_URL}/v2/query/video_generation/{task_id}",
+                headers=headers,
                 timeout=30,
             )
             status_resp.raise_for_status()
-            status_data = status_resp.json()
-            if status_data.get("done"):
+            task_data = status_resp.json().get("task", {})
+            status = task_data.get("status")
+            if status in ("succeeded", "failed", "cancelled"):
                 break
         else:
             return None, "Tạo video quá lâu (vượt quá 4.5 phút), vui lòng thử lại."
 
-        if status_data.get("error"):
-            return None, status_data["error"].get("message", "Lỗi không xác định từ Veo.")
+        if task_data.get("status") != "succeeded":
+            err = task_data.get("error", {})
+            return None, err.get("message", f"Task {task_data.get('status', 'không xác định')}.")
 
-        samples = (
-            status_data.get("response", {})
-            .get("generateVideoResponse", {})
-            .get("generatedSamples", [])
-        )
-        if not samples:
-            return None, "Veo không trả về video nào (có thể bị chặn bởi bộ lọc an toàn)."
+        video_url = task_data.get("content", {}).get("url")
+        if not video_url:
+            return None, "MiniMax không trả về video nào."
 
-        video_uri = samples[0]["video"]["uri"]
-        video_resp = requests.get(
-            video_uri, headers={"x-goog-api-key": GEMINI_API_KEY}, timeout=120
-        )
+        video_resp = requests.get(video_url, timeout=120)
         video_resp.raise_for_status()
         return video_resp.content, None
 
@@ -606,7 +612,7 @@ async def video(
     if usage_error:
         return JSONResponse({"error": usage_error}, status_code=429)
 
-    video_bytes, error = await asyncio.to_thread(_generate_veo_video_sync, prompt)
+    video_bytes, error = await asyncio.to_thread(_generate_minimax_video_sync, prompt)
 
     if error:
         return JSONResponse({"error": f"Lỗi khi tạo video: {error}"}, status_code=502)
