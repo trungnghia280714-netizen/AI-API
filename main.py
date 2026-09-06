@@ -40,14 +40,15 @@ CLAUDE_API_KEYS = _parse_keys("CLAUDE_API_KEY")      # Code (qua Bluesminds/UnoR
 CHATGPT_API_KEYS = _parse_keys("CHATGPT_API_KEY")    # Ảnh (qua Bluesminds/UnoRouter)
 MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "")   # Video (MiniMax) - chưa xoay vòng
 
-CHAT_MODEL = os.environ.get("CHAT_MODEL", "deepseek-v4-pro")  # Bluesminds chỉ có v3 / v4-pro
-CODE_MODEL = os.environ.get("CODE_MODEL", "claude-sonnet-4-5")  # kiểm tra đúng tên trong danh sách model Bluesminds
-VISION_MODEL = os.environ.get("VISION_MODEL", "claude-sonnet-4-5")
+# "auto/bynara" = router tự chọn model còn quyền truy cập, tránh lỗi "no access to model"
+CHAT_MODEL = os.environ.get("CHAT_MODEL", "auto/bynara")
+CODE_MODEL = os.environ.get("CODE_MODEL", "auto/bynara")
+VISION_MODEL = os.environ.get("VISION_MODEL", "auto/bynara")
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "gpt-image-2")
 VIDEO_MODEL = os.environ.get("VIDEO_MODEL", "MiniMax-H3")
 
 # Bluesminds/UnoRouter: dịch vụ trung gian OpenAI-compatible (không phải OpenAI/Anthropic/DeepSeek chính chủ)
-BLUESMINDS_BASE_URL = os.environ.get("BLUESMINDS_BASE_URL", "https://api.unorouter.com/v1")
+BLUESMINDS_BASE_URL = os.environ.get("BLUESMINDS_BASE_URL", "https://router.bynara.id/v1")
 OPENAI_IMAGE_URL = f"{BLUESMINDS_BASE_URL}/images/generations"
 BLUESMINDS_CHAT_URL = f"{BLUESMINDS_BASE_URL}/chat/completions"
 # MiniMax chính chủ - nếu key của bạn thực chất là key UnoRouter (không phải MiniMax thật),
