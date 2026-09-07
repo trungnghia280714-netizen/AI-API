@@ -32,25 +32,23 @@ def _parse_keys(env_name: str) -> list:
     raw = os.environ.get(env_name, "")
     return [k.strip() for k in raw.split(",") if k.strip()]
 
-# Bluesminds: dịch vụ trung gian OpenAI-compatible, có model Chat (DeepSeek), Code (Claude) và Ảnh (GPT).
-# Tách riêng biến theo từng tính năng để dễ quản lý - dù dùng chung 1 tài khoản Bluesminds,
-# có thể đổi riêng từng cái sang nhà cung cấp khác sau này mà không ảnh hưởng các phần còn lại.
-DEEPSEEK_API_KEYS = _parse_keys("DEEPSEEK_API_KEY")  # Chat (qua Bluesminds/UnoRouter)
-CLAUDE_API_KEYS = _parse_keys("CLAUDE_API_KEY")      # Code (qua Bluesminds/UnoRouter)
-CHATGPT_API_KEYS = _parse_keys("CHATGPT_API_KEY")    # Ảnh (qua Bluesminds/UnoRouter)
+# Xkiro: gateway AI chuyên nghiệp, có tài liệu rõ ràng, hỗ trợ 1 vài model MIỄN PHÍ
+# (đánh dấu ":free" hoặc giá $0). Dùng chung 1 key Xkiro cho cả Chat và Code.
+XKIRO_API_KEYS = _parse_keys("XKIRO_API_KEY")        # Chat + Code (qua Xkiro)
+CHATGPT_API_KEYS = _parse_keys("CHATGPT_API_KEY")    # Ảnh (qua Bluesminds/UnoRouter - tạm giữ)
 MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "")   # Video (MiniMax) - chưa xoay vòng
 
-# "auto/bynara" = router tự chọn model còn quyền truy cập, tránh lỗi "no access to model"
-CHAT_MODEL = os.environ.get("CHAT_MODEL", "auto/bynara")
-CODE_MODEL = os.environ.get("CODE_MODEL", "auto/bynara")
-VISION_MODEL = os.environ.get("VISION_MODEL", "auto/bynara")
+CHAT_MODEL = os.environ.get("CHAT_MODEL", "deepseek/deepseek-v4-flash")
+CODE_MODEL = os.environ.get("CODE_MODEL", "openai/gpt-5.3-codex-spark")
+VISION_MODEL = os.environ.get("VISION_MODEL", "openai/gpt-5.3-codex-spark")
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "gpt-image-2")
 VIDEO_MODEL = os.environ.get("VIDEO_MODEL", "MiniMax-H3")
 
-# Bluesminds/UnoRouter: dịch vụ trung gian OpenAI-compatible (không phải OpenAI/Anthropic/DeepSeek chính chủ)
+XKIRO_BASE_URL = os.environ.get("XKIRO_BASE_URL", "https://api.xkiro.com/v1")
+XKIRO_CHAT_URL = f"{XKIRO_BASE_URL}/chat/completions"
+# Bluesminds/UnoRouter: vẫn tạm dùng cho Ảnh, chưa xác nhận Xkiro có hỗ trợ tạo ảnh
 BLUESMINDS_BASE_URL = os.environ.get("BLUESMINDS_BASE_URL", "https://router.bynara.id/v1")
 OPENAI_IMAGE_URL = f"{BLUESMINDS_BASE_URL}/images/generations"
-BLUESMINDS_CHAT_URL = f"{BLUESMINDS_BASE_URL}/chat/completions"
 # MiniMax chính chủ - nếu key của bạn thực chất là key UnoRouter (không phải MiniMax thật),
 # đổi biến môi trường MINIMAX_BASE_URL sang base URL của UnoRouter.
 MINIMAX_BASE_URL = os.environ.get("MINIMAX_BASE_URL", "https://api.minimax.io")
@@ -117,11 +115,14 @@ def on_startup():
 # Hàm gọi các AI provider trả phí
 # =====================================================================
 def call_bluesminds(keys: list, messages: list, model: str, system_prompt: str = "",
-                     temperature: float = 0.7, max_tokens: int = 4096, key_error_msg: str = "key"):
-    """Gọi Bluesminds (API kiểu OpenAI-compatible) - dùng chung cho Chat (DeepSeek) và Code (Claude).
+                     temperature: float = 0.7, max_tokens: int = 4096, key_error_msg: str = "key",
+                     url: str = None):
+    """Gọi 1 gateway kiểu OpenAI-compatible (Xkiro/Bluesminds/...) - dùng chung cho Chat và Code.
     Tự động xoay vòng qua danh sách key nếu 1 key bị lỗi 429/401."""
     if not keys:
         raise ValueError(f"Server chưa cấu hình {key_error_msg}.")
+
+    chat_url = url or XKIRO_CHAT_URL
 
     full_messages = list(messages)
     if system_prompt:
@@ -133,7 +134,7 @@ def call_bluesminds(keys: list, messages: list, model: str, system_prompt: str =
     for key in keys:
         try:
             resp = requests.post(
-                BLUESMINDS_CHAT_URL,
+                chat_url,
                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                 json=body,
                 timeout=120,  # model pro có thể chậm, nới thời gian chờ
@@ -157,10 +158,10 @@ def extract_openai_style_error(e: requests.exceptions.HTTPError) -> str:
 
 
 def call_claude(system_prompt: str, messages: list, model: str, max_tokens: int = 4096):
-    """Code + Vision - Claude (Sonnet) qua Bluesminds."""
+    """Code + Vision - qua Xkiro."""
     return call_bluesminds(
-        CLAUDE_API_KEYS, messages, model,
-        system_prompt=system_prompt, max_tokens=max_tokens, key_error_msg="CLAUDE_API_KEY",
+        XKIRO_API_KEYS, messages, model,
+        system_prompt=system_prompt, max_tokens=max_tokens, key_error_msg="XKIRO_API_KEY",
     )
 
 
@@ -397,7 +398,7 @@ async def chat(
 
     try:
         reply = call_bluesminds(
-            DEEPSEEK_API_KEYS, messages, CHAT_MODEL, key_error_msg="DEEPSEEK_API_KEY"
+            XKIRO_API_KEYS, messages, CHAT_MODEL, key_error_msg="XKIRO_API_KEY"
         )
         result = {"reply": reply}
         if user:
