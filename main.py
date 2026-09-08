@@ -1,10 +1,6 @@
-import asyncio
-import base64
 import json
 import os
 import re
-import time
-import urllib.parse
 from datetime import date
 
 import requests
@@ -25,41 +21,48 @@ from auth import (
 from database import Conversation, Message, UsageLog, User, get_db, init_db
 
 # ---------- Cấu hình từ biến môi trường (KHÔNG hardcode key) ----------
-# Mỗi biến có thể chứa NHIỀU key cách nhau bằng dấu phẩy, vd:
-# DEEPSEEK_API_KEY=key1,key2,key3
-# -> khi 1 key bị giới hạn (429) hoặc lỗi xác thực, tự động thử key kế tiếp.
 def _parse_keys(env_name: str) -> list:
+    """Mỗi biến có thể chứa NHIỀU key cách nhau bằng dấu phẩy, vd: XKIRO_API_KEY=key1,key2
+    -> khi 1 key bị giới hạn (429) hoặc lỗi xác thực, tự động thử key kế tiếp."""
     raw = os.environ.get(env_name, "")
     return [k.strip() for k in raw.split(",") if k.strip()]
 
-# apinex: gateway AI chuyên nghiệp, có tài liệu rõ ràng, hỗ trợ 1 vài model MIỄN PHÍ
-# (đánh dấu ":free" hoặc giá $0). Dùng chung 1 key apinex cho cả Chat và Code.
-APINEX_API_KEY = _parse_keys("APINEX_API_KEY")        # Chat + Code 
-CHATGPT_API_KEYS = _parse_keys("CHATGPT_API_KEY")    # Ảnh (qua Bluesminds/UnoRouter - tạm giữ)
-MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "")   # Video (MiniMax) - chưa xoay vòng
+XKIRO_API_KEYS = _parse_keys("XKIRO_API_KEY")
+APINEX_API_KEYS = _parse_keys("APINEX_API_KEY")
 
-CHAT_MODEL = os.environ.get("CHAT_MODEL", "free/gemini-3.8-flash")
-CODE_MODEL = os.environ.get("CODE_MODEL", "openai/gpt-5.3-codex-spark")
-VISION_MODEL = os.environ.get("VISION_MODEL", "openai/gpt-5.3-codex-spark")
-IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "gpt-image-2")
-VIDEO_MODEL = os.environ.get("VIDEO_MODEL", "MiniMax-H3")
+XKIRO_BASE_URL = os.environ.get("XKIRO_BASE_URL", "https://api.xkiro.com/v1")
+APINEX_BASE_URL = os.environ.get("APINEX_BASE_URL", "https://apinex.bond/v1")
 
-APINEX_BASE_URL = os.environ.get("APINEX_BASE_URL", "https://api.apinex.bond/v1")
-APINEX_CHAT_URL = f"{APINEX_BASE_URL}/chat/completions"
-# Bluesminds/UnoRouter: vẫn tạm dùng cho Ảnh, chưa xác nhận Xkiro có hỗ trợ tạo ảnh
-BLUESMINDS_BASE_URL = os.environ.get("BLUESMINDS_BASE_URL", "https://router.bynara.id/v1")
-OPENAI_IMAGE_URL = f"{BLUESMINDS_BASE_URL}/images/generations"
-# MiniMax chính chủ - nếu key của bạn thực chất là key UnoRouter (không phải MiniMax thật),
-# đổi biến môi trường MINIMAX_BASE_URL sang base URL của UnoRouter.
-MINIMAX_BASE_URL = os.environ.get("MINIMAX_BASE_URL", "https://api.minimax.io")
-
+# Danh sách model chat mà người dùng có thể chọn trong giao diện.
+# Chỉ những model có key đã cấu hình mới thực sự gọi được - còn lại hiện "chưa sẵn sàng".
+MODEL_CATALOG = {
+    "deepseek-flash": {
+        "label": "DeepSeek Flash",
+        "url": f"{XKIRO_BASE_URL}/chat/completions",
+        "keys": XKIRO_API_KEYS,
+        "model": "deepseek/deepseek-v4-flash",
+    },
+    "deepseek-pro": {
+        "label": "DeepSeek V4 Pro",
+        "url": f"{XKIRO_BASE_URL}/chat/completions",
+        "keys": XKIRO_API_KEYS,
+        "model": "deepseek/deepseek-v4-pro",
+    },
+    "gemini-3-8-flash": {
+        "label": "Gemini 3.8 Flash",
+        "url": f"{APINEX_BASE_URL}/chat/completions",
+        "keys": APINEX_API_KEYS,
+        "model": "gemini-3.8-flash",
+    },
+}
+DEFAULT_MODEL_ID = "deepseek-flash"
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 
 # Hạn mức gói free / ngày (theo tài khoản đã đăng nhập)
-DAILY_LIMITS = {"chat": 40, "code": 5, "image": 5, "video": 1}
-FEATURE_NAMES_VI = {"chat": "Chat", "code": "Code Assistant", "image": "Tạo ảnh", "video": "Tạo video"}
+DAILY_LIMITS = {"chat": 40}
+FEATURE_NAMES_VI = {"chat": "Chat"}
 UNLIMITED_PLANS = {"inteligent_cold", "inteligent_super_cold"}
 
 
@@ -112,32 +115,25 @@ def on_startup():
 
 
 # =====================================================================
-# Hàm gọi các AI provider trả phí
+# Gọi model chat theo model_id trong MODEL_CATALOG
 # =====================================================================
-def call_bluesminds(keys: list, messages: list, model: str, system_prompt: str = "",
-                     temperature: float = 0.7, max_tokens: int = 4096, key_error_msg: str = "key",
-                     url: str = None):
-    """Gọi 1 gateway kiểu OpenAI-compatible (Xkiro/Bluesminds/...) - dùng chung cho Chat và Code.
-    Tự động xoay vòng qua danh sách key nếu 1 key bị lỗi 429/401."""
-    if not keys:
-        raise ValueError(f"Server chưa cấu hình {key_error_msg}.")
+def call_chat_model(model_id: str, messages: list, temperature: float = 0.7, max_tokens: int = 4096):
+    entry = MODEL_CATALOG.get(model_id)
+    if not entry:
+        raise ValueError(f"Model '{model_id}' không tồn tại.")
+    if not entry["keys"]:
+        raise ValueError(f"Server chưa cấu hình key cho model '{entry['label']}'.")
 
-    chat_url = url or APINEX_CHAT_URL
-
-    full_messages = list(messages)
-    if system_prompt:
-        full_messages = [{"role": "system", "content": system_prompt}] + full_messages
-
-    body = {"model": model, "messages": full_messages, "temperature": temperature, "max_tokens": max_tokens}
+    body = {"model": entry["model"], "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
 
     last_error = None
-    for key in keys:
+    for key in entry["keys"]:
         try:
             resp = requests.post(
-                chat_url,
+                entry["url"],
                 headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
                 json=body,
-                timeout=120,  # model pro có thể chậm, nới thời gian chờ
+                timeout=120,
             )
             resp.raise_for_status()
             data = resp.json()
@@ -151,21 +147,6 @@ def call_bluesminds(keys: list, messages: list, model: str, system_prompt: str =
 
 
 def extract_openai_style_error(e: requests.exceptions.HTTPError) -> str:
-    try:
-        return e.response.json().get("error", {}).get("message", "")
-    except Exception:
-        return ""
-
-
-def call_claude(system_prompt: str, messages: list, model: str, max_tokens: int = 4096):
-    """Code + Vision - qua Xkiro."""
-    return call_bluesminds(
-        APINEX_API_KEYS, messages, model,
-        system_prompt=system_prompt, max_tokens=max_tokens, key_error_msg="APINEX_API_KEY",
-    )
-
-
-def extract_claude_error(e: requests.exceptions.HTTPError) -> str:
     try:
         return e.response.json().get("error", {}).get("message", "")
     except Exception:
@@ -291,6 +272,17 @@ async def me(user: User = Depends(get_current_user)):
 
 
 # =====================================================================
+# MODELS (danh sách model cho ô chọn trên giao diện)
+# =====================================================================
+@app.get("/api/models")
+async def list_models():
+    return [
+        {"id": model_id, "label": entry["label"], "available": bool(entry["keys"])}
+        for model_id, entry in MODEL_CATALOG.items()
+    ]
+
+
+# =====================================================================
 # CONVERSATIONS (lịch sử trò chuyện)
 # =====================================================================
 @app.get("/api/conversations")
@@ -370,7 +362,7 @@ async def update_settings(
 
 
 # =====================================================================
-# 1. CHAT (DeepSeek)
+# CHAT (có chọn model)
 # =====================================================================
 @app.post("/api/chat")
 async def chat(
@@ -386,11 +378,14 @@ async def chat(
     message = body.get("message", "").strip()
     history = body.get("history", [])
     conversation_id = body.get("conversation_id")
+    model_id = body.get("model_id", DEFAULT_MODEL_ID)
 
     if not message:
         return JSONResponse({"error": "Thiếu 'message'."}, status_code=400)
 
-    # Đảm bảo hàm này không bị lỗi crash khi user = None
+    if model_id not in MODEL_CATALOG:
+        return JSONResponse({"error": f"Model '{model_id}' không hợp lệ."}, status_code=400)
+
     usage_error = check_and_increment_usage(db, user, "chat")
     if usage_error:
         return JSONResponse({"error": usage_error}, status_code=429)
@@ -398,20 +393,11 @@ async def chat(
     messages = history + [{"role": "user", "content": message}]
 
     try:
-        # Đã đổi tên hàm hoặc bổ sung APINEX_CHAT_URL nếu hàm call_bluesminds của bạn cần URL độc lập
-        reply = call_bluesminds(
-            api_keys=APINEX_API_KEYS, 
-            messages=messages, 
-            model=CHAT_MODEL, 
-            key_error_msg="APINEX_API_KEY"
-        )
-        
+        reply = call_chat_model(model_id, messages)
         result = {"reply": reply}
         if user:
             result["conversation_id"] = save_turn(db, user, conversation_id, "chat", message, reply)
-            
-        return JSONResponse(result, status_code=200)
-        
+        return result
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except requests.exceptions.HTTPError as e:
@@ -419,270 +405,6 @@ async def chat(
         return JSONResponse({"error": f"Lỗi khi gọi dịch vụ chat: {detail or str(e)}"}, status_code=502)
     except requests.exceptions.RequestException as e:
         return JSONResponse({"error": f"Lỗi khi gọi dịch vụ chat: {str(e)}"}, status_code=502)
-
-# =====================================================================
-# 1b. VISION (Claude - hỏi AI về nội dung ảnh đính kèm)
-# =====================================================================
-@app.post("/api/vision")
-async def vision(
-    request: Request,
-    user=Depends(get_optional_user),
-    db: Session = Depends(get_db),
-):
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Body request không hợp lệ (cần JSON)."}, status_code=400)
-
-    prompt = body.get("prompt", "").strip() or "Mô tả và phân tích nội dung ảnh này."
-    image_base64 = body.get("image_base64", "")
-    mime = body.get("mime", "image/jpeg")
-    conversation_id = body.get("conversation_id")
-
-    if not image_base64:
-        return JSONResponse({"error": "Thiếu 'image_base64'."}, status_code=400)
-
-    usage_error = check_and_increment_usage(db, user, "chat")
-    if usage_error:
-        return JSONResponse({"error": usage_error}, status_code=429)
-
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": prompt},
-                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{image_base64}"}},
-            ],
-        }
-    ]
-
-    try:
-        reply = call_claude("", messages, VISION_MODEL)
-        result = {"reply": reply}
-        if user:
-            result["conversation_id"] = save_turn(
-                db, user, conversation_id, "chat", f"[Ảnh đính kèm] {prompt}", reply
-            )
-        return result
-    except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
-    except requests.exceptions.HTTPError as e:
-        detail = extract_claude_error(e)
-        return JSONResponse({"error": f"Lỗi khi phân tích ảnh: {detail or str(e)}"}, status_code=502)
-    except requests.exceptions.RequestException as e:
-        return JSONResponse({"error": f"Lỗi khi phân tích ảnh: {str(e)}"}, status_code=502)
-
-
-# =====================================================================
-# 2. ẢNH (OpenAI - GPT Image 2)
-# =====================================================================
-@app.post("/api/image")
-async def image(
-    request: Request,
-    user=Depends(get_optional_user),
-    db: Session = Depends(get_db),
-):
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Body request không hợp lệ (cần JSON)."}, status_code=400)
-
-    prompt = body.get("prompt", "").strip()
-    if not prompt:
-        return JSONResponse({"error": "Thiếu 'prompt'."}, status_code=400)
-
-    if not CHATGPT_API_KEYS:
-        return JSONResponse({"error": "Server chưa cấu hình CHATGPT_API_KEY."}, status_code=400)
-
-    usage_error = check_and_increment_usage(db, user, "image")
-    if usage_error:
-        return JSONResponse({"error": usage_error}, status_code=429)
-
-    last_error = None
-    for key in CHATGPT_API_KEYS:
-        try:
-            resp = requests.post(
-                OPENAI_IMAGE_URL,
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json={"model": IMAGE_MODEL, "prompt": prompt, "size": "1024x1024", "n": 1},
-                timeout=120,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            items = data.get("data", [])
-            if not items or not items[0].get("b64_json"):
-                return JSONResponse({"error": "Không nhận được ảnh từ OpenAI."}, status_code=502)
-            return {"image_base64": items[0]["b64_json"], "mime": "image/png"}
-        except requests.exceptions.HTTPError as e:
-            last_error = e
-            if e.response is not None and e.response.status_code in (401, 429):
-                continue  # thử key kế tiếp
-            detail = extract_openai_style_error(e)
-            return JSONResponse({"error": f"Lỗi khi gọi dịch vụ ảnh: {detail or str(e)}"}, status_code=502)
-        except requests.exceptions.RequestException as e:
-            return JSONResponse({"error": f"Lỗi khi gọi dịch vụ ảnh: {str(e)}"}, status_code=502)
-
-    detail = extract_openai_style_error(last_error) if last_error else ""
-    return JSONResponse(
-        {"error": f"Tất cả key CHATGPT_API_KEY đều bị giới hạn hoặc lỗi: {detail or str(last_error)}"},
-        status_code=502,
-    )
-
-
-# =====================================================================
-# 3. VIDEO (MiniMax H3 - text-to-video)
-# =====================================================================
-def _generate_minimax_video_sync(prompt: str):
-    """Chạy đồng bộ (blocking) trong thread riêng - tạo task ở MiniMax, poll đến khi xong, tải video về.
-    Trả về (video_bytes, error_message). Chỉ 1 trong 2 giá trị khác None."""
-    if not MINIMAX_API_KEY:
-        return None, "Server chưa cấu hình MINIMAX_API_KEY."
-
-    headers = {"Authorization": f"Bearer {MINIMAX_API_KEY}", "Content-Type": "application/json"}
-
-    try:
-        create_resp = requests.post(
-            f"{MINIMAX_BASE_URL}/v2/video_generation",
-            headers=headers,
-            json={
-                "model": VIDEO_MODEL,
-                "content": [{"type": "text", "text": prompt}],
-                "resolution": "768P",
-                "duration": 6,
-                "ratio": "16:9",
-            },
-            timeout=30,
-        )
-        create_resp.raise_for_status()
-        task_id = create_resp.json().get("task_id")
-        if not task_id:
-            return None, "Không nhận được task_id từ MiniMax."
-
-        max_wait_seconds = 280
-        interval_seconds = 8
-        elapsed = 0
-        task_data = None
-
-        while elapsed < max_wait_seconds:
-            time.sleep(interval_seconds)
-            elapsed += interval_seconds
-            status_resp = requests.get(
-                f"{MINIMAX_BASE_URL}/v2/query/video_generation/{task_id}",
-                headers=headers,
-                timeout=30,
-            )
-            status_resp.raise_for_status()
-            task_data = status_resp.json().get("task", {})
-            status = task_data.get("status")
-            if status in ("succeeded", "failed", "cancelled"):
-                break
-        else:
-            return None, "Tạo video quá lâu (vượt quá 4.5 phút), vui lòng thử lại."
-
-        if task_data.get("status") != "succeeded":
-            err = task_data.get("error", {})
-            return None, err.get("message", f"Task {task_data.get('status', 'không xác định')}.")
-
-        video_url = task_data.get("content", {}).get("url")
-        if not video_url:
-            return None, "MiniMax không trả về video nào."
-
-        video_resp = requests.get(video_url, timeout=120)
-        video_resp.raise_for_status()
-        return video_resp.content, None
-
-    except requests.exceptions.HTTPError as e:
-        detail = ""
-        try:
-            detail = e.response.json().get("error", {}).get("message", "")
-        except Exception:
-            pass
-        return None, detail or str(e)
-    except requests.exceptions.RequestException as e:
-        return None, str(e)
-
-
-@app.post("/api/video")
-async def video(
-    request: Request,
-    user=Depends(get_optional_user),
-    db: Session = Depends(get_db),
-):
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Body request không hợp lệ (cần JSON)."}, status_code=400)
-
-    prompt = body.get("prompt", "").strip()
-    if not prompt:
-        return JSONResponse({"error": "Thiếu 'prompt'."}, status_code=400)
-
-    usage_error = check_and_increment_usage(db, user, "video")
-    if usage_error:
-        return JSONResponse({"error": usage_error}, status_code=429)
-
-    video_bytes, error = await asyncio.to_thread(_generate_minimax_video_sync, prompt)
-
-    if error:
-        return JSONResponse({"error": f"Lỗi khi tạo video: {error}"}, status_code=502)
-
-    encoded_video = base64.b64encode(video_bytes).decode("utf-8")
-    return {"video_base64": encoded_video, "mime": "video/mp4"}
-
-
-# =====================================================================
-# 4. CODE ASSISTANT (Claude)
-# =====================================================================
-CODE_SYSTEM_PROMPT = (
-    "Bạn là một trợ lý lập trình chuyên nghiệp, giống GitHub Copilot. "
-    "Khi nhận yêu cầu, hãy viết code hoàn chỉnh, chạy được ngay, theo đúng ngôn ngữ "
-    "người dùng yêu cầu (Python, JavaScript, HTML, CSS, v.v.). "
-    "Luôn đặt code trong khối markdown code block (```ngôn_ngữ ... ```). "
-    "Sau đoạn code, giải thích ngắn gọn cách code hoạt động và lưu ý sử dụng (nếu có). "
-    "Nếu người dùng không nói rõ ngôn ngữ, hãy chọn ngôn ngữ phù hợp nhất với yêu cầu."
-)
-
-
-@app.post("/api/code")
-async def code_assistant(
-    request: Request,
-    user=Depends(get_optional_user),
-    db: Session = Depends(get_db),
-):
-    try:
-        body = await request.json()
-    except Exception:
-        return JSONResponse({"error": "Body request không hợp lệ (cần JSON)."}, status_code=400)
-
-    prompt = body.get("prompt", "").strip()
-    language = body.get("language", "").strip()
-    history = body.get("history", [])
-    conversation_id = body.get("conversation_id")
-
-    if not prompt:
-        return JSONResponse({"error": "Thiếu 'prompt'."}, status_code=400)
-
-    usage_error = check_and_increment_usage(db, user, "code")
-    if usage_error:
-        return JSONResponse({"error": usage_error}, status_code=429)
-
-    user_content = f"Ngôn ngữ mong muốn: {language}\nYêu cầu: {prompt}" if language else prompt
-
-    messages = history + [{"role": "user", "content": user_content}]
-
-    try:
-        reply = call_claude(CODE_SYSTEM_PROMPT, messages, CODE_MODEL)
-        result = {"reply": reply}
-        if user:
-            result["conversation_id"] = save_turn(db, user, conversation_id, "code", prompt, reply)
-        return result
-    except ValueError as e:
-        return JSONResponse({"error": str(e)}, status_code=400)
-    except requests.exceptions.HTTPError as e:
-        detail = extract_claude_error(e)
-        return JSONResponse({"error": f"Lỗi khi gọi dịch vụ code: {detail or str(e)}"}, status_code=502)
-    except requests.exceptions.RequestException as e:
-        return JSONResponse({"error": f"Lỗi khi gọi dịch vụ code: {str(e)}"}, status_code=502)
 
 
 # ---------- Health check ----------
