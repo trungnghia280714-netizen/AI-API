@@ -38,7 +38,7 @@ APINEX_API_KEY = _parse_keys("APINEX_API_KEY")        # Chat + Code
 CHATGPT_API_KEYS = _parse_keys("CHATGPT_API_KEY")    # Ảnh (qua Bluesminds/UnoRouter - tạm giữ)
 MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "")   # Video (MiniMax) - chưa xoay vòng
 
-CHAT_MODEL = os.environ.get("CHAT_MODEL", "deepseek/deepseek-v4-flash")
+CHAT_MODEL = os.environ.get("CHAT_MODEL", "free/gemini-3.8-flash")
 CODE_MODEL = os.environ.get("CODE_MODEL", "openai/gpt-5.3-codex-spark")
 VISION_MODEL = os.environ.get("VISION_MODEL", "openai/gpt-5.3-codex-spark")
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "gpt-image-2")
