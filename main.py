@@ -390,6 +390,7 @@ async def chat(
     if not message:
         return JSONResponse({"error": "Thiếu 'message'."}, status_code=400)
 
+    # Đảm bảo hàm này không bị lỗi crash khi user = None
     usage_error = check_and_increment_usage(db, user, "chat")
     if usage_error:
         return JSONResponse({"error": usage_error}, status_code=429)
@@ -397,13 +398,20 @@ async def chat(
     messages = history + [{"role": "user", "content": message}]
 
     try:
+        # Đã đổi tên hàm hoặc bổ sung APINEX_CHAT_URL nếu hàm call_bluesminds của bạn cần URL độc lập
         reply = call_bluesminds(
-            APINEX_API_KEYS, messages, CHAT_MODEL, key_error_msg="APINEX_API_KEY"
+            api_keys=APINEX_API_KEYS, 
+            messages=messages, 
+            model=CHAT_MODEL, 
+            key_error_msg="APINEX_API_KEY"
         )
+        
         result = {"reply": reply}
         if user:
             result["conversation_id"] = save_turn(db, user, conversation_id, "chat", message, reply)
-        return result
+            
+        return JSONResponse(result, status_code=200)
+        
     except ValueError as e:
         return JSONResponse({"error": str(e)}, status_code=400)
     except requests.exceptions.HTTPError as e:
@@ -411,7 +419,6 @@ async def chat(
         return JSONResponse({"error": f"Lỗi khi gọi dịch vụ chat: {detail or str(e)}"}, status_code=502)
     except requests.exceptions.RequestException as e:
         return JSONResponse({"error": f"Lỗi khi gọi dịch vụ chat: {str(e)}"}, status_code=502)
-
 
 # =====================================================================
 # 1b. VISION (Claude - hỏi AI về nội dung ảnh đính kèm)
