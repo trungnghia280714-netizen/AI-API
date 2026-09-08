@@ -398,7 +398,7 @@ async def chat(
 
     try:
         reply = call_bluesminds(
-            XKIRO_API_KEYS, messages, CHAT_MODEL, key_error_msg="XKIRO_API_KEY"
+            APINEX_API_KEYS, messages, CHAT_MODEL, key_error_msg="APINEX_API_KEY"
         )
         result = {"reply": reply}
         if user:
