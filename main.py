@@ -32,9 +32,9 @@ def _parse_keys(env_name: str) -> list:
     raw = os.environ.get(env_name, "")
     return [k.strip() for k in raw.split(",") if k.strip()]
 
-# Xkiro: gateway AI chuyên nghiệp, có tài liệu rõ ràng, hỗ trợ 1 vài model MIỄN PHÍ
-# (đánh dấu ":free" hoặc giá $0). Dùng chung 1 key Xkiro cho cả Chat và Code.
-XKIRO_API_KEYS = _parse_keys("XKIRO_API_KEY")        # Chat + Code (qua Xkiro)
+# apinex: gateway AI chuyên nghiệp, có tài liệu rõ ràng, hỗ trợ 1 vài model MIỄN PHÍ
+# (đánh dấu ":free" hoặc giá $0). Dùng chung 1 key apinex cho cả Chat và Code.
+APINEX_API_KEY = _parse_keys("APINEX_API_KEY")        # Chat + Code 
 CHATGPT_API_KEYS = _parse_keys("CHATGPT_API_KEY")    # Ảnh (qua Bluesminds/UnoRouter - tạm giữ)
 MINIMAX_API_KEY = os.environ.get("MINIMAX_API_KEY", "")   # Video (MiniMax) - chưa xoay vòng
 
@@ -44,8 +44,8 @@ VISION_MODEL = os.environ.get("VISION_MODEL", "openai/gpt-5.3-codex-spark")
 IMAGE_MODEL = os.environ.get("IMAGE_MODEL", "gpt-image-2")
 VIDEO_MODEL = os.environ.get("VIDEO_MODEL", "MiniMax-H3")
 
-XKIRO_BASE_URL = os.environ.get("XKIRO_BASE_URL", "https://api.xkiro.com/v1")
-XKIRO_CHAT_URL = f"{XKIRO_BASE_URL}/chat/completions"
+APINEX_BASE_URL = os.environ.get("APINEX_BASE_URL", "https://api.apinex.bond/v1")
+APINEX_CHAT_URL = f"{APINEX_BASE_URL}/chat/completions"
 # Bluesminds/UnoRouter: vẫn tạm dùng cho Ảnh, chưa xác nhận Xkiro có hỗ trợ tạo ảnh
 BLUESMINDS_BASE_URL = os.environ.get("BLUESMINDS_BASE_URL", "https://router.bynara.id/v1")
 OPENAI_IMAGE_URL = f"{BLUESMINDS_BASE_URL}/images/generations"
@@ -122,7 +122,7 @@ def call_bluesminds(keys: list, messages: list, model: str, system_prompt: str =
     if not keys:
         raise ValueError(f"Server chưa cấu hình {key_error_msg}.")
 
-    chat_url = url or XKIRO_CHAT_URL
+    chat_url = url or APINEX_CHAT_URL
 
     full_messages = list(messages)
     if system_prompt:
@@ -160,8 +160,8 @@ def extract_openai_style_error(e: requests.exceptions.HTTPError) -> str:
 def call_claude(system_prompt: str, messages: list, model: str, max_tokens: int = 4096):
     """Code + Vision - qua Xkiro."""
     return call_bluesminds(
-        XKIRO_API_KEYS, messages, model,
-        system_prompt=system_prompt, max_tokens=max_tokens, key_error_msg="XKIRO_API_KEY",
+        APINEX_API_KEYS, messages, model,
+        system_prompt=system_prompt, max_tokens=max_tokens, key_error_msg="APINEX_API_KEY",
     )
 
 
