@@ -30,13 +30,13 @@ def _parse_keys(env_name: str) -> list:
 XKIRO_API_KEYS = _parse_keys("XKIRO_API_KEY")
 APINEX_API_KEYS = _parse_keys("APINEX_API_KEY")
 OMNIROUTE_API_KEYS = _parse_keys("OMNIROUTE_API_KEYS")
+CODECRAFT_API_KEYS = _parse_keys("CODECRAFT_API_KEY")   # <-- thêm mới
 
 XKIRO_BASE_URL = os.environ.get("XKIRO_BASE_URL", "https://api.xkiro.com/v1")
 APINEX_BASE_URL = os.environ.get("APINEX_BASE_URL", "https://apinex.bond/v1")
 OMNIROUTE_BASE_URL = os.environ.get("OMNIROUTE_BASE_URL", "http://localhost:20128/v1")
+CODECRAFT_BASE_URL = os.environ.get("CODECRAFT_BASE_URL", "https://codecraftapi.com/v1")  # <-- thêm mới
 
-# Danh sách model chat mà người dùng có thể chọn trong giao diện.
-# Chỉ những model có key đã cấu hình mới thực sự gọi được - còn lại hiện "chưa sẵn sàng".
 MODEL_CATALOG = {
     "deepseek-flash": {
         "label": "DeepSeek Flash",
@@ -56,11 +56,17 @@ MODEL_CATALOG = {
         "keys": APINEX_API_KEYS,
         "model": "gemini-3.8-flash",
     },
-        "omniroute-free": {
+    "omniroute-free": {
         "label": "OmniRoute Free",
         "url": f"{OMNIROUTE_BASE_URL}/chat/completions",
         "keys": OMNIROUTE_API_KEYS,
         "model": "openrouter/openrouter/free",
+    },
+    "claude-sonnet-5": {                                  # <-- thêm mới
+        "label": "Claude Sonnet 5",
+        "url": f"{CODECRAFT_BASE_URL}/chat/completions",
+        "keys": CODECRAFT_API_KEYS,
+        "model": "claude-sonnet-5",   # chỉnh lại đúng tên model mà codecraftapi.com yêu cầu
     },
 }
 DEFAULT_MODEL_ID = "deepseek-flash"
