@@ -22,46 +22,49 @@ from database import Conversation, Message, UsageLog, User, get_db, init_db
 
 # ---------- Cấu hình từ biến môi trường (KHÔNG hardcode key) ----------
 def _parse_keys(env_name: str) -> list:
-    """Mỗi biến có thể chứa NHIỀU key cách nhau bằng dấu phẩy, vd: XKIRO_API_KEY=key1,key2
-    -> khi 1 key bị giới hạn (429) hoặc lỗi xác thực, tự động thử key kế tiếp."""
     raw = os.environ.get(env_name, "")
     return [k.strip() for k in raw.split(",") if k.strip()]
 
-XKIRO_API_KEY = _parse_keys("XKIRO_API_KEY")
-APINEX_API_KEY = _parse_keys("APINEX_API_KEY")
+APINEX_API_KEYS = _parse_keys("APINEX_API_KEY")
+OMNIROUTE_API_KEYS = _parse_keys("OMNIROUTE_API_KEYS")
+CODECRAFT_API_KEYS = _parse_keys("CODECRAFT_API_KEY")
+NVIDIA_API_KEYS = _parse_keys("NVIDIA_API_KEY")          # <-- thêm mới, thay cho XKIRO
 
-CODECRAFT_API_KEY = _parse_keys("CODECRAFT_API_KEY")   # <-- thêm mới
-
-XKIRO_BASE_URL = os.environ.get("XKIRO_BASE_URL", "https://api.xkiro.com/v1")
 APINEX_BASE_URL = os.environ.get("APINEX_BASE_URL", "https://apinex.bond/v1")
-
-CODECRAFT_BASE_URL = os.environ.get("CODECRAFT_BASE_URL", "https://codecraftapi.com/v1")  # <-- thêm mới
+OMNIROUTE_BASE_URL = os.environ.get("OMNIROUTE_BASE_URL", "http://localhost:20128/v1")
+CODECRAFT_BASE_URL = os.environ.get("CODECRAFT_BASE_URL", "https://codecraftapi.com/v1")
+NVIDIA_BASE_URL = os.environ.get("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")  # <-- thêm mới
 
 MODEL_CATALOG = {
     "deepseek-flash": {
-        "label": "DeepSeek Flash",
-        "url": f"{XKIRO_BASE_URL}/chat/completions",
-        "keys": XKIRO_API_KEY,
-        "model": "deepseek/deepseek-v4-flash",
+        "label": "DeepSeek V4 Flash",
+        "url": f"{NVIDIA_BASE_URL}/chat/completions",
+        "keys": NVIDIA_API_KEYS,
+        "model": "deepseek-ai/deepseek-v4-flash",   # đổi nguồn: XKiro -> NVIDIA
     },
     "deepseek-pro": {
         "label": "DeepSeek V4 Pro",
-        "url": f"{XKIRO_BASE_URL}/chat/completions",
-        "keys": XKIRO_API_KEY,
-        "model": "deepseek/deepseek-v4-pro",
+        "url": f"{NVIDIA_BASE_URL}/chat/completions",
+        "keys": NVIDIA_API_KEYS,
+        "model": "deepseek-ai/deepseek-v4-pro",     # đổi nguồn: XKiro -> NVIDIA
     },
     "gemini-3-8-flash": {
         "label": "Gemini 3.8 Flash",
         "url": f"{APINEX_BASE_URL}/chat/completions",
-        "keys": APINEX_API_KEY,
+        "keys": APINEX_API_KEYS,
         "model": "gemini-3.8-flash",
     },
-
-    "claude-sonnet-5": {                                  # <-- thêm mới
+    "omniroute-free": {
+        "label": "OmniRoute Free",
+        "url": f"{OMNIROUTE_BASE_URL}/chat/completions",
+        "keys": OMNIROUTE_API_KEYS,
+        "model": "openrouter/openrouter/free",
+    },
+    "claude-sonnet-5": {
         "label": "Claude Sonnet 5",
         "url": f"{CODECRAFT_BASE_URL}/chat/completions",
-        "keys": CODECRAFT_API_KEY,
-        "model": "claude-sonnet-5",   # chỉnh lại đúng tên model mà codecraftapi.com yêu cầu
+        "keys": CODECRAFT_API_KEYS,
+        "model": "claude-sonnet-5",
     },
 }
 DEFAULT_MODEL_ID = "deepseek-flash"
