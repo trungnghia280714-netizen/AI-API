@@ -26,41 +26,41 @@ def _parse_keys(env_name: str) -> list:
     return [k.strip() for k in raw.split(",") if k.strip()]
 
 APINEX_API_KEYS = _parse_keys("APINEX_API_KEY")
-OMNIROUTE_API_KEYS = _parse_keys("OMNIROUTE_API_KEYS")
 CODECRAFT_API_KEYS = _parse_keys("CODECRAFT_API_KEY")
-NVIDIA_API_KEYS = _parse_keys("NVIDIA_API_KEY")          # <-- thêm mới, thay cho XKIRO
 
 APINEX_BASE_URL = os.environ.get("APINEX_BASE_URL", "https://apinex.bond/v1")
-OMNIROUTE_BASE_URL = os.environ.get("OMNIROUTE_BASE_URL", "http://localhost:20128/v1")
 CODECRAFT_BASE_URL = os.environ.get("CODECRAFT_BASE_URL", "https://codecraftapi.com/v1")
-NVIDIA_BASE_URL = os.environ.get("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1")  # <-- thêm mới
 
 MODEL_CATALOG = {
-    "deepseek-flash": {
-        "label": "DeepSeek V4 Flash",
-        "url": f"{NVIDIA_BASE_URL}/chat/completions",
-        "keys": NVIDIA_API_KEYS,
-        "model": "deepseek-ai/deepseek-v4-flash",
-        "extra_body": {"chat_template_kwargs": {"thinking": True, "reasoning_effort": "high"}},
-    },
-    "deepseek-pro": {
-        "label": "DeepSeek V4 Pro",
-        "url": f"{NVIDIA_BASE_URL}/chat/completions",
-        "keys": NVIDIA_API_KEYS,
-        "model": "deepseek-ai/deepseek-v4-pro",
-        "extra_body": {"chat_template_kwargs": {"thinking": False}},
-    },
     "gemini-3-8-flash": {
         "label": "Gemini 3.8 Flash",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
-        "model": "gemini-3.8-flash",
+        "model": "free/gemini-3.8-flash",
     },
-    "omniroute-free": {
-        "label": "OmniRoute Free",
-        "url": f"{OMNIROUTE_BASE_URL}/chat/completions",
-        "keys": OMNIROUTE_API_KEYS,
-        "model": "openrouter/openrouter/free",
+    "gemini-3-1-pro": {
+        "label": "Gemini 3.1 Pro",
+        "url": f"{APINEX_BASE_URL}/chat/completions",
+        "keys": APINEX_API_KEYS,
+        "model": "free/gemini-3.1-pro",
+    },
+    "deepseek-v4-1-flash": {
+        "label": "DeepSeek V4.1 Flash",
+        "url": f"{APINEX_BASE_URL}/chat/completions",
+        "keys": APINEX_API_KEYS,
+        "model": "free/deepseek-v4.1-flash",
+    },
+    "deepseek-v4-pro": {
+        "label": "DeepSeek V4 Pro",
+        "url": f"{APINEX_BASE_URL}/chat/completions",
+        "keys": APINEX_API_KEYS,
+        "model": "free/deepseek-v4-pro-0813",
+    },
+    "gpt-5-6-luna": {
+        "label": "GPT 5.6 Luna",
+        "url": f"{APINEX_BASE_URL}/chat/completions",
+        "keys": APINEX_API_KEYS,
+        "model": "free/gpt-5.6-luna",
     },
     "claude-sonnet-5": {
         "label": "Claude Sonnet 5",
@@ -69,48 +69,7 @@ MODEL_CATALOG = {
         "model": "claude-sonnet-5",
     },
 }
-
-
-def call_chat_model(model_id: str, messages: list, temperature: float = 0.7, max_tokens: int = 4096):
-    entry = MODEL_CATALOG.get(model_id)
-    if not entry:
-        raise ValueError(f"Model '{model_id}' không tồn tại.")
-    if not entry["keys"]:
-        raise ValueError(f"Server chưa cấu hình key cho model '{entry['label']}'.")
-
-    body = {"model": entry["model"], "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
-
-    # Một số model (vd: DeepSeek reasoning trên NVIDIA) cần thêm tham số extra_body riêng
-    if "extra_body" in entry:
-        body.update(entry["extra_body"])
-
-    last_error = None
-    for key in entry["keys"]:
-        try:
-            resp = requests.post(
-                entry["url"],
-                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-                json=body,
-                timeout=120,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            message = data["choices"][0]["message"]
-            content = message.get("content") or ""
-            # DeepSeek reasoning model trả phần suy luận riêng trong reasoning/reasoning_content
-            reasoning = message.get("reasoning") or message.get("reasoning_content")
-            if reasoning and not content:
-                # Nếu max_tokens hết ngay trong lúc suy luận, content có thể rỗng
-                content = "(Model đang suy luận nhưng chưa kịp trả lời — thử tăng max_tokens)"
-            return content
-        except requests.exceptions.HTTPError as e:
-            last_error = e
-            if e.response is not None and e.response.status_code in (401, 429):
-                continue  # key này hết hạn mức hoặc sai -> thử key kế tiếp
-            raise
-    raise last_error
-
-DEFAULT_MODEL_ID = "deepseek-flash"
+DEFAULT_MODEL_ID = "gemini-3-8-flash"
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
