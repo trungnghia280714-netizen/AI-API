@@ -40,13 +40,15 @@ MODEL_CATALOG = {
         "label": "DeepSeek V4 Flash",
         "url": f"{NVIDIA_BASE_URL}/chat/completions",
         "keys": NVIDIA_API_KEYS,
-        "model": "deepseek-ai/deepseek-v4-flash",   # đổi nguồn: XKiro -> NVIDIA
+        "model": "deepseek-ai/deepseek-v4-flash",
+        "extra_body": {"chat_template_kwargs": {"thinking": True, "reasoning_effort": "high"}},
     },
     "deepseek-pro": {
         "label": "DeepSeek V4 Pro",
         "url": f"{NVIDIA_BASE_URL}/chat/completions",
         "keys": NVIDIA_API_KEYS,
-        "model": "deepseek-ai/deepseek-v4-pro",     # đổi nguồn: XKiro -> NVIDIA
+        "model": "deepseek-ai/deepseek-v4-pro",
+        "extra_body": {"chat_template_kwargs": {"thinking": False}},
     },
     "gemini-3-8-flash": {
         "label": "Gemini 3.8 Flash",
@@ -67,6 +69,47 @@ MODEL_CATALOG = {
         "model": "claude-sonnet-5",
     },
 }
+
+
+def call_chat_model(model_id: str, messages: list, temperature: float = 0.7, max_tokens: int = 4096):
+    entry = MODEL_CATALOG.get(model_id)
+    if not entry:
+        raise ValueError(f"Model '{model_id}' không tồn tại.")
+    if not entry["keys"]:
+        raise ValueError(f"Server chưa cấu hình key cho model '{entry['label']}'.")
+
+    body = {"model": entry["model"], "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+
+    # Một số model (vd: DeepSeek reasoning trên NVIDIA) cần thêm tham số extra_body riêng
+    if "extra_body" in entry:
+        body.update(entry["extra_body"])
+
+    last_error = None
+    for key in entry["keys"]:
+        try:
+            resp = requests.post(
+                entry["url"],
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json=body,
+                timeout=120,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            message = data["choices"][0]["message"]
+            content = message.get("content") or ""
+            # DeepSeek reasoning model trả phần suy luận riêng trong reasoning/reasoning_content
+            reasoning = message.get("reasoning") or message.get("reasoning_content")
+            if reasoning and not content:
+                # Nếu max_tokens hết ngay trong lúc suy luận, content có thể rỗng
+                content = "(Model đang suy luận nhưng chưa kịp trả lời — thử tăng max_tokens)"
+            return content
+        except requests.exceptions.HTTPError as e:
+            last_error = e
+            if e.response is not None and e.response.status_code in (401, 429):
+                continue  # key này hết hạn mức hoặc sai -> thử key kế tiếp
+            raise
+    raise last_error
+
 DEFAULT_MODEL_ID = "deepseek-flash"
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
