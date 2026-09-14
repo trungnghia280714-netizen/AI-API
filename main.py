@@ -6,7 +6,7 @@ from datetime import date
 import requests
 from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, Response as FastAPIResponse
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
 from sqlalchemy.orm import Session
@@ -20,47 +20,60 @@ from auth import (
 )
 from database import Conversation, Message, UsageLog, User, get_db, init_db
 
-# ---------- Cấu hình từ biến môi trường (KHÔNG hardcode key) ----------
+# =====================================================================
+# Cấu hình từ biến môi trường (KHÔNG hardcode key)
+# =====================================================================
 def _parse_keys(env_name: str) -> list:
+    """Mỗi biến có thể chứa NHIỀU key cách nhau bằng dấu phẩy.
+    Khi 1 key bị giới hạn (429) hoặc lỗi xác thực, tự động thử key kế tiếp."""
     raw = os.environ.get(env_name, "")
     return [k.strip() for k in raw.split(",") if k.strip()]
 
-APINEX_API_KEYS = _parse_keys("APINEX_API_KEY")
-CODECRAFT_API_KEYS = _parse_keys("CODECRAFT_API_KEY")
+# --- API Keys ---
+APINEX_API_KEYS      = _parse_keys("APINEX_API_KEY")
+CODECRAFT_API_KEYS   = _parse_keys("CODECRAFT_API_KEY")   # Claude Sonnet 5
+OPENROUTER_TTS_KEY   = os.environ.get("OPENROUTER_TTS_KEY", "")  # Fish Audio TTS
 
-APINEX_BASE_URL = os.environ.get("APINEX_BASE_URL", "https://apinex.bond/v1")
+# --- Base URLs ---
+APINEX_BASE_URL    = os.environ.get("APINEX_BASE_URL",    "https://apinex.bond/v1")
 CODECRAFT_BASE_URL = os.environ.get("CODECRAFT_BASE_URL", "https://codecraftapi.com/v1")
 
+# =====================================================================
+# Danh sách model chat
+# Lưu ý: Apinex yêu cầu tiền tố "free/" cho các model miễn phí
+# Weight của Apinex: ×4 = Gemini Flash, ×3 = GPT Luna, ×2 = các model còn lại
+# Pool chung 1 triệu token/ngày reset 00:00 UTC — dùng model weight thấp để tiết kiệm quota
+# =====================================================================
 MODEL_CATALOG = {
-    "gemini-3-8-flash": {
-        "label": "Gemini 3.8 Flash",
-        "url": f"{APINEX_BASE_URL}/chat/completions",
-        "keys": APINEX_API_KEYS,
-        "model": "free/gemini-3.8-flash",
-    },
-    "gemini-3-1-pro": {
-        "label": "Gemini 3.1 Pro",
-        "url": f"{APINEX_BASE_URL}/chat/completions",
-        "keys": APINEX_API_KEYS,
-        "model": "free/gemini-3.1-pro",
-    },
     "deepseek-v4-1-flash": {
         "label": "DeepSeek V4.1 Flash",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
-        "model": "free/deepseek-v4.1-flash",
+        "model": "free/deepseek-v4.1-flash",   # weight ×2 — tiết kiệm nhất
     },
     "deepseek-v4-pro": {
         "label": "DeepSeek V4 Pro",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
-        "model": "free/deepseek-v4-pro-0813",
+        "model": "free/deepseek-v4-pro-0813",   # weight ×2
+    },
+    "gemini-3-8-flash": {
+        "label": "Gemini 3.8 Flash",
+        "url": f"{APINEX_BASE_URL}/chat/completions",
+        "keys": APINEX_API_KEYS,
+        "model": "free/gemini-3.8-flash",       # weight ×4
+    },
+    "gemini-3-1-pro": {
+        "label": "Gemini 3.1 Pro",
+        "url": f"{APINEX_BASE_URL}/chat/completions",
+        "keys": APINEX_API_KEYS,
+        "model": "free/gemini-3.1-pro",         # weight ×2
     },
     "gpt-5-6-luna": {
         "label": "GPT 5.6 Luna",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
-        "model": "free/gpt-5.6-luna",
+        "model": "free/gpt-5.6-luna",           # weight ×3
     },
     "claude-sonnet-5": {
         "label": "Claude Sonnet 5",
@@ -69,7 +82,7 @@ MODEL_CATALOG = {
         "model": "claude-sonnet-5",
     },
 }
-DEFAULT_MODEL_ID = "gemini-3-8-flash"
+DEFAULT_MODEL_ID = "deepseek-v4-1-flash"   # weight ×2 — mặc định tiết kiệm quota nhất
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
@@ -81,8 +94,9 @@ UNLIMITED_PLANS = {"inteligent_cold", "inteligent_super_cold"}
 
 
 def check_and_increment_usage(db: Session, user, feature: str):
-    """Trả về None nếu còn hạn mức (đã tăng đếm), hoặc chuỗi lỗi nếu đã hết hạn mức hôm nay.
-    Nếu user=None (khách chưa đăng nhập) hoặc user có gói không giới hạn -> bỏ qua, trả về None."""
+    """Trả về None nếu còn hạn mức (đã tăng đếm),
+    hoặc chuỗi lỗi nếu đã hết hạn mức hôm nay.
+    Nếu user=None (khách chưa đăng nhập) hoặc user có gói không giới hạn -> bỏ qua."""
     if not user:
         return None
     if getattr(user, "plan", "free") in UNLIMITED_PLANS:
@@ -138,7 +152,16 @@ def call_chat_model(model_id: str, messages: list, temperature: float = 0.7, max
     if not entry["keys"]:
         raise ValueError(f"Server chưa cấu hình key cho model '{entry['label']}'.")
 
-    body = {"model": entry["model"], "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+    body = {
+        "model": entry["model"],
+        "messages": messages,
+        "temperature": temperature,
+        "max_tokens": max_tokens,
+    }
+
+    # Một số model cần tham số extra (vd: DeepSeek reasoning trên NVIDIA)
+    if "extra_body" in entry:
+        body.update(entry["extra_body"])
 
     last_error = None
     for key in entry["keys"]:
@@ -151,7 +174,14 @@ def call_chat_model(model_id: str, messages: list, temperature: float = 0.7, max
             )
             resp.raise_for_status()
             data = resp.json()
-            return data["choices"][0]["message"]["content"]
+            message = data["choices"][0]["message"]
+            content = message.get("content") or ""
+            # DeepSeek reasoning trả phần suy luận riêng — lấy content câu trả lời cuối
+            if not content:
+                reasoning = message.get("reasoning") or message.get("reasoning_content")
+                if reasoning:
+                    content = "(Model đang suy luận nhưng chưa kịp trả lời — thử tăng max_tokens)"
+            return content
         except requests.exceptions.HTTPError as e:
             last_error = e
             if e.response is not None and e.response.status_code in (401, 429):
@@ -421,7 +451,59 @@ async def chat(
         return JSONResponse({"error": f"Lỗi khi gọi dịch vụ chat: {str(e)}"}, status_code=502)
 
 
-# ---------- Health check ----------
+# =====================================================================
+# TTS — Text to Speech qua Fish Audio (OpenRouter)
+# =====================================================================
+@app.post("/api/tts")
+async def tts(request: Request):
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Body request không hợp lệ (cần JSON)."}, status_code=400)
+
+    text = body.get("text", "").strip()
+    if not text:
+        return JSONResponse({"error": "Thiếu 'text'."}, status_code=400)
+
+    if not OPENROUTER_TTS_KEY:
+        return JSONResponse({"error": "Server chưa cấu hình OPENROUTER_TTS_KEY."}, status_code=400)
+
+    # Giới hạn độ dài để tránh request quá nặng
+    text = text[:4000]
+
+    try:
+        resp = requests.post(
+            "https://openrouter.ai/api/v1/audio/speech",
+            headers={
+                "Authorization": f"Bearer {OPENROUTER_TTS_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": "fish-audio/s2.1-pro-free:free",
+                "input": text,
+                "voice": "alloy",
+            },
+            timeout=60,
+        )
+        resp.raise_for_status()
+        return FastAPIResponse(
+            content=resp.content,
+            media_type=resp.headers.get("Content-Type", "audio/mpeg"),
+        )
+    except requests.exceptions.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.response.json().get("error", {}).get("message", "")
+        except Exception:
+            pass
+        return JSONResponse({"error": f"Lỗi TTS: {detail or str(e)}"}, status_code=502)
+    except requests.exceptions.RequestException as e:
+        return JSONResponse({"error": f"Lỗi TTS: {str(e)}"}, status_code=502)
+
+
+# =====================================================================
+# Health check
+# =====================================================================
 @app.get("/")
 async def root():
     return {"status": "ok", "service": "INTELIGENT Backend"}
