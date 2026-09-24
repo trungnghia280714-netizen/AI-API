@@ -49,37 +49,37 @@ MODEL_CATALOG = {
         "label": "DeepSeek V4.1 Flash",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
-        "model": "free/deepseek-v4.1-flash",   # weight ×2 — tiết kiệm nhất
+        "model": "free/deepseek-v4.1-flash",   # weight ×5 — tiết kiệm nhất
     },
     "deepseek-v4-pro": {
         "label": "DeepSeek V4 Pro",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
-        "model": "free/deepseek-v4-pro-0813",   # weight ×2
+        "model": "free/deepseek-v4-pro-0813",   # weight ×5
     },
     "gemini-3-8-flash": {
         "label": "Gemini 3.8 Flash",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
-        "model": "free/gemini-3.8-flash",       # weight ×4
+        "model": "free/gemini-3.8-flash",       # weight ×5
     },
     "gemini-3-1-pro": {
         "label": "Gemini 3.1 Pro",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
-        "model": "free/gemini-3.1-pro",         # weight ×2
+        "model": "free/gemini-3.1-pro",         # weight ×
     },
     "gpt-5-6-luna": {
-        "label": "GPT 5.6 Luna",
+        "label": "GPT 6 Luna",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
-        "model": "free/gpt-5.6-luna",           # weight ×3
+        "model": "free/gpt-6-luna",           # weight ×3
     },
     "claude-sonnet-5": {
-        "label": "Claude Sonnet 5",
+        "label": "Claude Opus 5",
         "url": f"{CODECRAFT_BASE_URL}/chat/completions",
         "keys": CODECRAFT_API_KEYS,
-        "model": "claude-sonnet-5",
+        "model": "claude-opus-5",
     },
 }
 DEFAULT_MODEL_ID = "deepseek-v4-1-flash"   # weight ×2 — mặc định tiết kiệm quota nhất
