@@ -78,7 +78,7 @@ MODEL_CATALOG = {
     "claude-sonnet-5": {
         "label": "Claude Opus 5",
         "url": f"{CODECRAFT_BASE_URL}/chat/completions",
-        "keys": CODECRAFT_API_KEYS,
+        "keys": CODECRAFT_API_KEY,
         "model": "claude-opus-5",
     },
 }
