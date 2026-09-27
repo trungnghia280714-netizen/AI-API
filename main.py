@@ -67,7 +67,7 @@ MODEL_CATALOG = {
         "label": "Gemini 3.1 Pro",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
-        "model": "free/gemini-3.1-pro",         # weight ×
+        "model": "free/gemini-3.1-pro",         # weight ×3
     },
     "gpt-5-6-luna": {
         "label": "GPT 6 Luna",
@@ -75,10 +75,10 @@ MODEL_CATALOG = {
         "keys": APINEX_API_KEYS,
         "model": "free/gpt-6-luna",           # weight ×3
     },
-    "claude-sonnet-5": {
+    "claude-opus-5": {
         "label": "Claude Opus 5",
         "url": f"{CODECRAFT_BASE_URL}/chat/completions",
-        "keys": CODECRAFT_API_KEY,
+        "keys": CODECRAFT_API_KEYS,
         "model": "claude-opus-5",
     },
 }
