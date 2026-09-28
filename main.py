@@ -62,7 +62,7 @@ MODEL_CATALOG = {
         "model": "free/gemini-3.8-flash",       # weight ×5
     },
     "free/claude-opus-4.6": {
-        "label": "Claude opus 4.6 Flash",
+        "label": "Claude opus 4.6",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
         "model": "free/claude-opus-4.6",       # weight ×5
