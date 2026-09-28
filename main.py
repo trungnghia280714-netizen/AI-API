@@ -31,12 +31,10 @@ def _parse_keys(env_name: str) -> list:
 
 # --- API Keys ---
 APINEX_API_KEYS      = _parse_keys("APINEX_API_KEY")
-CODECRAFT_API_KEYS   = _parse_keys("CODECRAFT_API_KEY")   # Claude Sonnet 5
 OPENROUTER_TTS_KEY   = os.environ.get("OPENROUTER_TTS_KEY", "")  # Fish Audio TTS
 
 # --- Base URLs ---
 APINEX_BASE_URL    = os.environ.get("APINEX_BASE_URL",    "https://apinex.bond/v1")
-CODECRAFT_BASE_URL = os.environ.get("CODECRAFT_BASE_URL", "https://codecraftapi.com/v1")
 
 # =====================================================================
 # Danh sách model chat
@@ -63,13 +61,37 @@ MODEL_CATALOG = {
         "keys": APINEX_API_KEYS,
         "model": "free/gemini-3.8-flash",       # weight ×5
     },
+    "free/claude-opus-4.6": {
+        "label": "Claude opus 4.6 Flash",
+        "url": f"{APINEX_BASE_URL}/chat/completions",
+        "keys": APINEX_API_KEYS,
+        "model": "free/claude-opus-4.6",       # weight ×5
+    },
     "gemini-3-1-pro": {
         "label": "Gemini 3.1 Pro",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
         "model": "free/gemini-3.1-pro",         # weight ×3
     },
-    "gpt-5-6-luna": {
+    "glm-5.3-flash": {
+        "label": "Glm 5.3 flash",
+        "url": f"{APINEX_BASE_URL}/chat/completions",
+        "keys": APINEX_API_KEYS,
+        "model": "free/glm-5.3-flash",       # weight ×5
+    },
+    "kimi-k3": {
+        "label": "Kimi k3",
+        "url": f"{APINEX_BASE_URL}/chat/completions",
+        "keys": APINEX_API_KEYS,
+        "model": "free/kimi-k3",       # weight ×5
+    },
+    "qwen-3.8-max": {
+        "label": "Qwen 3.8 max",
+        "url": f"{APINEX_BASE_URL}/chat/completions",
+        "keys": APINEX_API_KEYS,
+        "model": "free/qwen-3.8-max",       # weight ×5
+    },
+    "gpt-6-luna": {
         "label": "GPT 6 Luna",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
