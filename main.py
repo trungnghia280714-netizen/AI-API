@@ -97,12 +97,6 @@ MODEL_CATALOG = {
         "keys": APINEX_API_KEYS,
         "model": "free/gpt-6-luna",           # weight ×3
     },
-    "claude-opus-5": {
-        "label": "Claude Opus 5",
-        "url": f"{CODECRAFT_BASE_URL}/chat/completions",
-        "keys": CODECRAFT_API_KEYS,
-        "model": "claude-opus-5",
-    },
 }
 DEFAULT_MODEL_ID = "deepseek-v4-1-flash"   # weight ×2 — mặc định tiết kiệm quota nhất
 
@@ -528,4 +522,4 @@ async def tts(request: Request):
 # =====================================================================
 @app.get("/")
 async def root():
-    return {"status": "ok", "service": "INTELIGENT Backend"}
+    return {"status": "ok", "service": "INTELIGENT Backend is ok now"}
