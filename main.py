@@ -49,6 +49,18 @@ MODEL_CATALOG = {
         "keys": APINEX_API_KEYS,
         "model": "free/deepseek-v4.1-flash",   # weight ×5 — tiết kiệm nhất
     },
+    "minimax-m3.1-flash": {
+        "label": "minimax-m3.1-flash",
+        "url": f"{APINEX_BASE_URL}/chat/completions",
+        "keys": APINEX_API_KEYS,
+        "model": "free/minimax-m3.1-flash",   # weight ×2
+    },
+    "muse-spark-1.3": {
+        "label": "muse-spark-1.3",
+        "url": f"{APINEX_BASE_URL}/chat/completions",
+        "keys": APINEX_API_KEYS,
+        "model": "free/muse-spark-1.3",   # weight ×
+    },
     "deepseek-v4-pro": {
         "label": "DeepSeek V4 Pro",
         "url": f"{APINEX_BASE_URL}/chat/completions",
@@ -61,35 +73,17 @@ MODEL_CATALOG = {
         "keys": APINEX_API_KEYS,
         "model": "free/gemini-3.8-flash",       # weight ×5
     },
-    "free/claude-opus-4.6": {
-        "label": "Claude opus 4.6",
+    "glm-5.3-flashx": {
+        "label": "glm-5.3-flashx",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
-        "model": "free/claude-opus-4.6",       # weight ×5
-    },
-    "gemini-3-1-pro": {
-        "label": "Gemini 3.1 Pro",
-        "url": f"{APINEX_BASE_URL}/chat/completions",
-        "keys": APINEX_API_KEYS,
-        "model": "free/gemini-3.1-pro",         # weight ×3
+        "model": "free/glm-5.3-flashx",       # weight ×5
     },
     "glm-5.3-flash": {
         "label": "Glm 5.3 flash",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
-        "model": "free/glm-5.3-flash",       # weight ×5
-    },
-    "kimi-k3": {
-        "label": "Kimi k3",
-        "url": f"{APINEX_BASE_URL}/chat/completions",
-        "keys": APINEX_API_KEYS,
-        "model": "free/kimi-k3",       # weight ×5
-    },
-    "qwen-3.8-max": {
-        "label": "Qwen 3.8 max",
-        "url": f"{APINEX_BASE_URL}/chat/completions",
-        "keys": APINEX_API_KEYS,
-        "model": "free/qwen-3.8-max",       # weight ×5
+        "model": "free/glm-5.3-flash",       # weight ×9
     },
     "gpt-6-luna": {
         "label": "GPT 6 Luna",
