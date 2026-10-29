@@ -31,7 +31,7 @@ def _parse_keys(env_name: str) -> list:
 
 # --- API Keys ---
 APINEX_API_KEYS      = _parse_keys("APINEX_API_KEY")
-XKIRO_API_KEY        = os.environ["XKIRO_API_KEY"]
+XKIRO_API_KEY        = os.environ("XKIRO_API_KEY")
 # --- Base URLs ---
 APINEX_BASE_URL    = os.environ.get("APINEX_BASE_URL",    "https://apinex.bond/v1")
 XKIRO_BASE_URL    = os.environ.get("XKIRO_BASE_URL",      "https://api.xkiro.com/v1")
