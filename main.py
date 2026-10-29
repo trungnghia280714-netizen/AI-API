@@ -31,11 +31,9 @@ def _parse_keys(env_name: str) -> list:
 
 # --- API Keys ---
 APINEX_API_KEYS      = _parse_keys("APINEX_API_KEY")
-XKIRO_API_KEY        = os.environ("XKIRO_API_KEY")
 # --- Base URLs ---
 APINEX_BASE_URL    = os.environ.get("APINEX_BASE_URL",    "https://apinex.bond/v1")
-XKIRO_BASE_URL    = os.environ.get("XKIRO_BASE_URL",      "https://api.xkiro.com/v1")
-     
+
 # =====================================================================
 # Danh sách model chat
 # Lưu ý: Apinex yêu cầu tiền tố "free/" cho các model miễn phí
@@ -47,12 +45,6 @@ MODEL_CATALOG = {
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
         "model": "free/deepseek-v4.1-flash",   # weight ×5 — tiết kiệm nhất
-    },
-       "mistralai/mistral-large-2512": {
-        "label": "Mistral large 3",
-        "url": f"{XKIRO_BASE_URL}/chat/completions",
-        "keys": XKIRO_API_KEY,
-        "model": "mistralai/mistral-large-2512",   # weight × — tiết kiệm nhất
     },
     "minimax-m3.1-flash": {
         "label": "minimax-m3.1-flash",
