@@ -51,7 +51,7 @@ MODEL_CATALOG = {
        "mistralai/mistral-large-2512": {
         "label": "Mistral large 3",
         "url": f"{XKIRO_BASE_URL}/chat/completions",
-        "keys": XKIRO_API_KEYS,
+        "keys": XKIRO_API_KEY,
         "model": "mistralai/mistral-large-2512",   # weight × — tiết kiệm nhất
     },
     "minimax-m3.1-flash": {
