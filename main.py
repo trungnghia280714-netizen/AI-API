@@ -18,6 +18,16 @@ from auth import (
     hash_password,
     verify_password,
 )
+from admin_api import router as admin_router
+from credits import (
+    CREDIT_FEATURE,
+    PLAN_CREDITS,
+    consume_chat_credit,
+    credit_status,
+    get_user_plan,
+    refund_chat_credit,
+    set_user_plan,
+)
 from database import Conversation, Message, UsageLog, User, get_db, init_db
 
 # =====================================================================
@@ -111,92 +121,7 @@ DEFAULT_MODEL_ID = "deepseek-v4-1-flash"
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
-
-# =====================================================================
-# CREDIT theo gói — mỗi lượt chat tốn cố định, dài hay ngắn đều như nhau
-# Credit làm mới mỗi ngày lúc 00:00 UTC (theo giờ server)
-#   Free        : 100 credit, 12.5 credit / lượt chat  (~8 lượt)
-#   Cold        : 500 credit, 20 credit / lượt chat    (~25 lượt)
-#   Super Cold  : 1000 credit, 10 credit / lượt chat   (~100 lượt)
-# Vì phí mỗi lượt cố định nên đếm số lượt chat đã dùng trong ngày (số nguyên, không sai số).
-# =====================================================================
-PLAN_CREDITS = {
-    "free":                  {"total": 100,  "cost": 12.5},
-    "inteligent_cold":       {"total": 500,  "cost": 20},
-    "inteligent_super_cold": {"total": 1000, "cost": 10},
-}
-CREDIT_FEATURE = "chat"
-
-
-def _fmt(n) -> str:
-    return f"{n:g}"
-
-
-def get_user_plan(user) -> str:
-    """Gói đang dùng: ưu tiên gói user tự chọn (lưu trong settings), rồi tới cột plan, mặc định free."""
-    try:
-        chosen = json.loads(getattr(user, "settings_json", None) or "{}").get("plan")
-    except Exception:
-        chosen = None
-    for plan in (chosen, getattr(user, "plan", None)):
-        if plan in PLAN_CREDITS:
-            return plan
-    return "free"
-
-
-def _today_log(db: Session, user):
-    return (
-        db.query(UsageLog)
-        .filter(UsageLog.user_id == user.id, UsageLog.feature == CREDIT_FEATURE,
-                UsageLog.usage_date == date.today().isoformat())
-        .first()
-    )
-
-
-def credit_status(db: Session, user) -> dict:
-    plan = get_user_plan(user)
-    cfg = PLAN_CREDITS[plan]
-    log = _today_log(db, user)
-    used_chats = log.count if log else 0
-    remaining = max(cfg["total"] - used_chats * cfg["cost"], 0)
-    return {
-        "plan": plan,
-        "total": cfg["total"],
-        "cost": cfg["cost"],
-        "remaining": remaining,
-        "max_chats": int(cfg["total"] // cfg["cost"]),
-        "remaining_chats": int(remaining // cfg["cost"]),
-    }
-
-
-def consume_chat_credit(db: Session, user):
-    """Trừ credit cho 1 lượt chat. Trả về (lỗi hoặc None, log để hoàn lại nếu chat thất bại).
-    Khách chưa đăng nhập (user=None) thì không tính credit."""
-    if not user:
-        return None, None
-    st = credit_status(db, user)
-    if st["remaining"] < st["cost"]:
-        return (
-            f"Bạn đã dùng hết {_fmt(st['total'])} credit hôm nay (mỗi lượt chat tốn {_fmt(st['cost'])} credit). "
-            f"Credit làm mới lúc 00:00 UTC, hoặc đổi sang gói khác trong Cài đặt.",
-            None,
-        )
-    log = _today_log(db, user)
-    if log:
-        log.count += 1
-    else:
-        log = UsageLog(user_id=user.id, feature=CREDIT_FEATURE, usage_date=date.today().isoformat(), count=1)
-        db.add(log)
-    db.commit()
-    return None, log
-
-
-def refund_chat_credit(db: Session, log):
-    """Hoàn credit nếu model lỗi (người dùng không bị trừ oan)."""
-    if log is not None and log.count > 0:
-        log.count -= 1
-        db.commit()
-
+OPENROUTER_TTS_KEY = os.environ.get("OPENROUTER_TTS_KEY", "")
 
 app = FastAPI(title="INTELIGENT Backend")
 
@@ -207,6 +132,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+app.include_router(admin_router)
 
 
 @app.on_event("startup")
@@ -384,6 +312,7 @@ async def me(user: User = Depends(get_current_user), db: Session = Depends(get_d
     return {
         "email": user.email,
         "plan": credits["plan"],
+        "is_admin": bool(getattr(user, "is_admin", False)),
         "credits": credits,
         "settings": json.loads(user.settings_json or "{}"),
     }
@@ -509,9 +438,16 @@ async def chat(
     if model_id not in MODEL_CATALOG:
         return JSONResponse({"error": f"Model '{model_id}' không hợp lệ."}, status_code=400)
 
+    if user is not None and getattr(user, "is_blocked", False):
+        return JSONResponse(
+            {"error": "Tài khoản của bạn đang bị khoá. Liên hệ quản trị viên nếu cần hỗ trợ."},
+            status_code=403,
+        )
+
     usage_error, credit_log = consume_chat_credit(db, user)
     if usage_error:
-        return JSONResponse({"error": usage_error, "credits": credit_status(db, user)}, status_code=429)
+        status = 403 if (user is not None and getattr(user, "is_blocked", False)) else 429
+        return JSONResponse({"error": usage_error, "credits": credit_status(db, user)}, status_code=status)
 
     messages = history + [{"role": "user", "content": message}]
 
