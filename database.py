@@ -1,7 +1,7 @@
 import os
 from datetime import datetime
 
-from sqlalchemy import create_engine, text, Column, Integer, String, Text, DateTime, ForeignKey
+from sqlalchemy import create_engine, text, Column, Integer, String, Text, DateTime, ForeignKey, Boolean, Float
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./app.db")
@@ -25,6 +25,13 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     settings_json = Column(Text, default="{}")  # lưu cài đặt (theme, v.v.) dạng JSON string
     plan = Column(String, default="free")  # "free" / "inteligent_cold" / "inteligent_super_cold"
+
+    # ===== Quản trị (admin) =====
+    is_admin = Column(Boolean, default=False)     # tài khoản có quyền vào trang /admin
+    is_blocked = Column(Boolean, default=False)   # bị admin khoá -> không chat được
+    extra_credits = Column(Float, default=0)      # admin cộng thêm credit cho user
+    custom_limit = Column(Integer, nullable=True)  # admin đặt hạn mức riêng (số lượt), None = theo gói
+    note = Column(Text, default="")               # ghi chú nội bộ về user
 
     conversations = relationship(
         "Conversation", back_populates="user", cascade="all, delete-orphan"
@@ -77,11 +84,20 @@ def init_db():
     Base.metadata.create_all(bind=engine)
     # create_all() chỉ tạo BẢNG MỚI, không tự thêm CỘT MỚI vào bảng đã tồn tại.
     # Tự vá các cột có thể bị thiếu do nâng cấp code sau khi bảng đã được tạo từ trước.
-    try:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS plan VARCHAR DEFAULT 'free'"))
-    except Exception:
-        pass  # bỏ qua nếu DB không hỗ trợ cú pháp này (vd: SQLite) hoặc cột đã tồn tại
+    new_columns = [
+        "plan VARCHAR DEFAULT 'free'",
+        "is_admin BOOLEAN DEFAULT FALSE",
+        "is_blocked BOOLEAN DEFAULT FALSE",
+        "extra_credits FLOAT DEFAULT 0",
+        "custom_limit INTEGER",
+        "note TEXT DEFAULT ''",
+    ]
+    for col in new_columns:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN IF NOT EXISTS {col}"))
+        except Exception:
+            pass  # bỏ qua nếu DB không hỗ trợ cú pháp này (vd: SQLite) hoặc cột đã tồn tại
 
 
 def get_db():
