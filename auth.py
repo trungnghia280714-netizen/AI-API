@@ -14,6 +14,11 @@ JWT_SECRET = os.environ.get("JWT_SECRET", "doi-secret-nay-truoc-khi-deploy-that"
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_DAYS = 30
 
+# Danh sách email được quyền quản trị (cách duy nhất để tự làm admin lần đầu
+# mà không cần truy cập trực tiếp database). Trên Render đặt biến môi trường:
+#   ADMIN_EMAILS = emailcuaban@gmail.com,email2@gmail.com
+ADMIN_EMAILS = {e.strip().lower() for e in os.environ.get("ADMIN_EMAILS", "").split(",") if e.strip()}
+
 # pbkdf2_sha256: thuần Python, không cần biên dịch C extension như bcrypt -> cài đặt ổn định hơn
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 security = HTTPBearer(auto_error=False)
@@ -43,6 +48,19 @@ def decode_token(token: str) -> int:
         raise HTTPException(status_code=401, detail="Token không hợp lệ hoặc đã hết hạn.")
 
 
+def _sync_admin_flag(db: Session, user: User) -> User:
+    """Nếu email nằm trong ADMIN_EMAILS thì tự gán quyền admin (lần đầu) và lưu lại."""
+    try:
+        if ADMIN_EMAILS and user.email and user.email.lower() in ADMIN_EMAILS and not user.is_admin:
+            user.is_admin = True
+            db.add(user)
+            db.commit()
+            db.refresh(user)
+    except Exception:
+        pass
+    return user
+
+
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     db: Session = Depends(get_db),
@@ -54,6 +72,23 @@ def get_current_user(
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=401, detail="Người dùng không tồn tại.")
+    return _sync_admin_flag(db, user)
+
+
+def get_admin_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db),
+) -> User:
+    """Bắt buộc là admin (is_admin = True trong DB hoặc email nằm trong ADMIN_EMAILS)."""
+    if credentials is None:
+        raise HTTPException(status_code=401, detail="Chưa đăng nhập.")
+    user_id = decode_token(credentials.credentials)
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Người dùng không tồn tại.")
+    user = _sync_admin_flag(db, user)
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="Tài khoản này không có quyền quản trị.")
     return user
 
 
