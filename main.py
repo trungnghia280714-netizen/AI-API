@@ -50,7 +50,7 @@ APINEX_BASE_URL    = os.environ.get("APINEX_BASE_URL",    "https://apinex.bond/v
 # Pool chung 1 triệu token/ngày reset 00:00 UTC (weight ×3–×5 tuỳ model)
 # =====================================================================
 MODEL_CATALOG = {
-    "deepseek-v4-1-flash": {
+    "Deepseek-v4-1-flash": {
         "label": "DeepSeek V4.1 Flash",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
@@ -62,41 +62,41 @@ MODEL_CATALOG = {
         "keys": APINEX_API_KEYS,
         "model": "free/muse-spark-1.3",   # weight ×2
     },
-    "minimax-m3.1-flash": {
+    "Minimax-m3.1-flash": {
         "label": "minimax-m3.1-flash",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
         "model": "free/minimax-m3.1-flash",   # weight ×2
     },
-    "kimi-k3": {
+    "Kimi-k3": {
         "label": "Kimi k3",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
         "model": "free/kimi-k3",   # weight ×
     },
-       "qwen-3.8-max": {
+       "Qwen-3.8-max": {
         "label": "Qwen 3.8 max",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
         "model": "free/qwen-3.8-max",   # weight ×3 — tiết kiệm nhất
     },
-    "deepseek-v4-pro": {
+    "Deepseek-v4-pro": {
         "label": "DeepSeek V4 Pro",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
         "model": "free/deepseek-v4-pro-0813",   # weight ×5
     },
-    "gemini-3-8-flash": {
+    "Gemini-3-8-flash": {
         "label": "Gemini 3.8 Flash",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
         "model": "free/gemini-3.8-flash",       # weight ×5
     },
-    "Mimo v2.6": {
-        "label": "mimo-v2.6-flash",
+    "Mimo v2.6 pro": {
+        "label": "mimo-v2.6-pro",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
-        "model": "free/mimo-v2.6-flash",       # weight ×5
+        "model": "free/mimo-v2.6-pro",       # weight ×5
     },
     "glm-5.3-flash": {
         "label": "Glm 5.3 flash",
@@ -111,7 +111,7 @@ MODEL_CATALOG = {
         "model": "free/gpt-6-luna",           # weight ×3
     },
         "Hy4": {
-        "label": "hy4",
+        "label": "Hy4",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
         "model": "free/hy4",   # weight ×2
