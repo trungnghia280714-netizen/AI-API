@@ -9,9 +9,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response as FastAPIResponse
 from google.auth.transport import requests as google_requests
 from google.oauth2 import id_token as google_id_token
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from auth import (
+    ADMIN_EMAILS,
     create_access_token,
     get_current_user,
     get_optional_user,
@@ -63,7 +65,7 @@ MODEL_CATALOG = {
         "model": "free/muse-spark-1.3",   # weight ×2
     },
     "Minimax-m3.1-flash": {
-        "label": "minimax-m3.1-flash",
+        "label": "Minimax-m3.1-flash",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
         "model": "free/minimax-m3.1-flash",   # weight ×2
@@ -74,7 +76,7 @@ MODEL_CATALOG = {
         "keys": APINEX_API_KEYS,
         "model": "free/kimi-k3",   # weight ×
     },
-       "Qwen-3.8-max": {
+       "qwen-3.8-max": {
         "label": "Qwen 3.8 max",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
@@ -92,11 +94,11 @@ MODEL_CATALOG = {
         "keys": APINEX_API_KEYS,
         "model": "free/gemini-3.8-flash",       # weight ×5
     },
-    "Mimo v2.6 pro": {
-        "label": "mimo-v2.6-pro",
+    "Mimo v2.6": {
+        "label": "Mimo-v2.6-pro",
         "url": f"{APINEX_BASE_URL}/chat/completions",
         "keys": APINEX_API_KEYS,
-        "model": "free/mimo-v2.6-pro",       # weight ×5
+        "model": "free/mimo-v2.6-flash",       # weight ×5
     },
     "glm-5.3-flash": {
         "label": "Glm 5.3 flash",
@@ -518,6 +520,41 @@ async def tts(request: Request):
         return JSONResponse({"error": f"Lỗi TTS: {detail or str(e)}"}, status_code=502)
     except requests.exceptions.RequestException as e:
         return JSONResponse({"error": f"Lỗi TTS: {str(e)}"}, status_code=502)
+
+
+# =====================================================================
+# Health check - dùng để kiểm tra database còn bền hay không
+# =====================================================================
+@app.get("/api/health")
+async def health(db: Session = Depends(get_db)):
+    """Báo trạng thái server + loại database đang dùng.
+
+    - "postgresql" = database bền, dữ liệu giữ qua mọi lần deploy  -> OK
+    - "sqlite"     = database tạm trên Render, MẤT SẠCH mỗi lần deploy -> cần sửa
+    """
+    try:
+        dialect = db.get_bind().dialect.name
+        users = db.query(func.count(User.id)).scalar() or 0
+        msg_count = db.query(func.count(Message.id)).scalar() or 0
+    except Exception as e:
+        return JSONResponse(
+            {"status": "error", "detail": str(e)},
+            status_code=500,
+        )
+    persistent = dialect == "postgresql"
+    return {
+        "status": "ok",
+        "db": dialect,
+        "persistent": persistent,
+        "users": users,
+        "messages": msg_count,
+        "admin_emails_configured": bool(ADMIN_EMAILS),
+        "warning": None if persistent else (
+            "Database đang dùng SQLite tạm trên Render - mọi lần deploy sẽ XOÁ SẠCH "
+            "tài khoản và lịch sử chat. Hãy đặt biến môi trường DATABASE_URL trỏ tới "
+            "Postgres (Neon/Supabase) rồi deploy lại."
+        ),
+    }
 
 
 # =====================================================================
