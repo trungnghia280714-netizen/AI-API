@@ -58,6 +58,12 @@ MODEL_CATALOG = {
         "keys": APINEX_API_KEYS,
         "model": "free/deepseek-v4.1-flash",   # weight ×5 — tiết kiệm nhất
     },
+    "Gemini 4 hydrogen": {
+        "label": "Gemini 4 hydrogen",
+        "url": f"{APINEX_BASE_URL}/chat/completions",
+        "keys": APINEX_API_KEYS,
+        "model": "free/gemini-4-hydrogen",   # weight ×5 — tiết kiệm nhất
+    },
         "Muse-spark-1.3": {
         "label": "muse-spark-1.3",
         "url": f"{APINEX_BASE_URL}/chat/completions",
